@@ -10,9 +10,9 @@
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include "index_html.h"
-#include "config_html.h" //script for configuration page
+#include "config_html.h" // Script for the configuration page
 #include <LittleFS.h>
-// this definitions are only used if EEPROM values are empty or not valid
+// These definitions are used if EEPROM values are empty or not valid
 #define MIN_VOLTAGE1 0.5
 #define MAX_VOLTAGE1 4.5
 #define MIN_PRESSURE1 0
@@ -22,18 +22,18 @@
 #define MIN_PRESSURE2 0
 #define MAX_PRESSURE2 15
 
-// Direcciones EEPROM
+// EEPROM Addresses
 const int ADDRESSES[] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36};
 
-// Oled display
+// OLED display
 //  OLED parameters
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define OLED_RESET 0 // No se usa el pin de reset en esta configuración
+#define OLED_RESET 0 // Reset pin not used in this configuration
 #define WIFI_AP_STA 1
-#define LED_PIN D5                // led para indicar si esta conectado a wifi (apagado)
-unsigned long previousMillis = 0; // Almacena la última vez que se envió un mensaje UDP
-const long interval = 3000;       // Intervalo en milisegundos (3000 ms = 3 segundos)
+#define LED_PIN D5                // LED to indicate if connected to Wi-Fi (off)
+unsigned long previousMillis = 0; // Stores the last time a UDP message was sent
+const long interval = 3000;       // Interval in milliseconds (3000 ms = 3 seconds)
 
 String hostName = "watermaker";
 float minVoltage1 = 0.5;
@@ -51,7 +51,7 @@ unsigned long startTime;           // Variable to store the start time of the co
 bool isFirstBoot = true;           // Variable to store if this is the first boot
 String ssid_sta = "enjoy";         // Set WLAN name for station connection
 String password_sta = "EmmO174.."; // Set password for station connection
-IPAddress ip1;                     // IP Address to be used for SigalK so that udp knows where to send messages - amend if yours is different
+IPAddress ip1;                     // IP Address for SigalK to know where to send UDP messages - amend if different
 unsigned int outPort = 4210;       // and which port to send to
 Adafruit_ADS1115 ads;              // Use this for the 16-bit version (ADS1115)
 
@@ -78,28 +78,28 @@ void drawScreen()
 #error("Height incorrect, please fix Adafruit_SSD1306.h!");
 #endif
 
-ESP8266WebServer server(80); // Define Web Server at port 80 for general connection to central boat wifi
+ESP8266WebServer server(80); // Define Web Server on port 80 for general connection to central boat Wi-Fi
 WiFiManager wifiManager;
 WiFiUDP Udp;
 void Event_Index()
 {
 
-  // If "http://<ip address>/" requested
+  // If "http://<ip address>/" is requested
 
   File file = LittleFS.open("/index.html", "r");
   if (!file)
   {
-    Serial.println("Error al abrir index.html");
+    Serial.println("Error opening index.html");
     server.send(404, "text/plain", "File not found");
 
     Dir dir = LittleFS.openDir("/");
-    Serial.println("Listado de archivos en LittleFS:");
+    Serial.println("Listing files in LittleFS:");
     while (dir.next())
     {
       File file = dir.openFile("r");
-      Serial.print("Archivo: ");
+      Serial.print("File: ");
       Serial.print(dir.fileName());
-      Serial.print(" Tamaño: ");
+      Serial.print(" Size: ");
       Serial.print(file.size());
       Serial.println(" bytes");
       file.close();
@@ -139,9 +139,9 @@ void readEEPROM()
   EEPROM.get(ADDRESSES[7], maxPressure2);
   if (isnan(maxVoltage1) || isnan(maxPressure1) || maxVoltage1 <= 0 || maxVoltage1 > 5 || maxPressure1 > 150 || maxPressure1 <= 0)
   {
-    // Código a ejecutar si maxVoltage1 o maxPressure1 es NaN,
-    // o si cualquiera de las otras condiciones se cumple
-    // asumimos que la EEPROM esta corrupta o no inicalizado y asignamos valores default
+    // Code to execute if maxVoltage1 or maxPressure1 is NaN,
+    // or if any of the other conditions are met
+    // we assume the EEPROM is corrupted or not initialized and assign default values
     minVoltage1 = MIN_VOLTAGE1;
     maxVoltage1 = MAX_VOLTAGE1;
     minPressure1 = MIN_PRESSURE1;
@@ -154,28 +154,30 @@ void readEEPROM()
   }
 }
 
+
 void Event_pressure()
 {
   String jsonResponse = "{\"pressure1\": " + String(pressure1) + ", \"pressure2\": " + String(pressure2) + "}";
-   server.send(200, "application/json", jsonResponse);
-   Serial.println(jsonResponse);
+  server.send(200, "application/json", jsonResponse);
+  Serial.println(jsonResponse);
 }
+
 void Event_js()
 {
   File file = LittleFS.open("/gauge.min.js", "r");
   if (!file)
   {
-    Serial.println("Error al abrir gauge.min.js");
+    Serial.println("Error opening gauge.min.js");
     server.send(404, "text/plain", "File not found");
 
     Dir dir = LittleFS.openDir("/");
-    Serial.println("Listado de archivos en LittleFS:");
+    Serial.println("Listing files in LittleFS:");
     while (dir.next())
     {
       File file = dir.openFile("r");
-      Serial.print("Archivo: ");
+      Serial.print("File: ");
       Serial.print(dir.fileName());
-      Serial.print(" Tamaño: ");
+      Serial.print(" Size: ");
       Serial.print(file.size());
       Serial.println(" bytes");
       file.close();
@@ -186,15 +188,14 @@ void Event_js()
   server.streamFile(file, "application/javascript");
   file.close();
 
-
   // If "http://<ip address>/" requested
-//  server.send(200, "text/html", indexHTML); // Send Index Website
+  // server.send(200, "text/html", indexHTML); // Send Index Website
 }
 
 void Event_Submit()
 {
-  server.send(200, "text/html", "Configuración guardada");
-  Serial.println("Configuración guardada");
+  server.send(200, "text/html", "Configuration saved");
+  Serial.println("Configuration saved");
   Serial.println(server.arg("maxPressure1"));
   Serial.println(server.arg("minPressure1"));
   Serial.println(server.arg("minVdc1"));
@@ -232,7 +233,6 @@ void Event_Config()
   htmlContent.replace(',', '.');
   server.send(200, "text/html", htmlContent);
 }
-
 /**
  * @brief This function is used to discover SignalK services.
  *
@@ -348,7 +348,7 @@ void setup()
   digitalWrite(LED_PIN, LOW);
   drawScreen();
   readEEPROM();
-  Serial.print("leo la EEPROM por primera vez...");
+  Serial.print("Reading EEPROM for the first time...");
   Serial.println(maxPressure1);
   WiFi.hostname(hostName); // setting it via mdns (later on) only works for AP mode
   tryingToConnect = true;
@@ -363,12 +363,12 @@ void setup()
   }
   if (!LittleFS.begin())
   {
-    Serial.println("Error al montar LittleFS");
+    Serial.println("Error mounting LittleFS");
     return;
   }
   else
   {
-    Serial.println("LittleFS montado correctamente");
+    Serial.println("LittleFS mounted successfully");
   }
   server.on("/", Event_Index);
   server.on("/gauge.min.js", Event_js); // when index_html calls for gauge.min.js we need to serve it.
@@ -382,29 +382,24 @@ void setup()
 }
 
 
-
 void loop()
 {
   int16_t adc0 = ads.readADC_SingleEnded(0); // Reading from channel 0
   float voltage1 = adc0 * 0.1875 / 1000;     // Convert to voltage
-  int16_t adc1 = ads.readADC_SingleEnded(1); // Reading from channel 0
+  int16_t adc1 = ads.readADC_SingleEnded(1); // Reading from channel 1
   float voltage2 = adc1 * 0.1875 / 1000;     // Convert to voltage
 
-  // Mapeo del voltaje a la presión
-  // El voltaje de 0.5 a 4.5 V corresponde a 0 a 15 bar
-  pressure1 = ((
-                   voltage1 - minVoltage1) /
-               (maxVoltage1 - minVoltage1)) *
-              (maxPressure1 - minPressure1); // Ajustar el rango de voltaje al rango de presión
+  // Mapping voltage to pressure
+  // Voltage from 0.5 to 4.5 V corresponds to 0 to 15 bar
+  pressure1 = ((voltage1 - minVoltage1) / (maxVoltage1 - minVoltage1)) * 
+              (maxPressure1 - minPressure1); // Adjust voltage range to pressure range
   if (pressure1 < 0)
   {
     pressure1 = 0; // no negative pressure
   }
 
-  pressure2 = ((
-                   voltage2 - minVoltage2) /
-               (maxVoltage2 - minVoltage2)) *
-              (maxPressure2 - minPressure2); // Ajustar el rango de voltaje al rango de presión
+  pressure2 = ((voltage2 - minVoltage2) / (maxVoltage2 - minVoltage2)) * 
+              (maxPressure2 - minPressure2); // Adjust voltage range to pressure range
   if (pressure2 < 0)
   {
     pressure2 = 0; // no negative pressure
@@ -425,7 +420,7 @@ void loop()
     else if (millis() - startTime > 7000)
     {
       Serial.println("Attempting WiFi autoconnect");
-      wifiManager.autoConnect("Windlass_AP", "12345678"); // password protected ap
+      wifiManager.autoConnect("Windlass_AP", "12345678"); // password-protected AP
       tryingToConnect = true;                             // Set true again for the next check
     }
   }
@@ -436,30 +431,29 @@ void loop()
     digitalWrite(LED_PIN, LOW);
     tryingToConnect = false;
   }
-  else // we are connected to wifi
+  else // we are connected to WiFi
   {
     unsigned long currentMillis = millis();
     if (currentMillis - previousMillis >= interval)
     {
-      previousMillis = currentMillis; // Guarda el tiempo actual
-      char udpmessage1[1024];         // Next few lines send metadata to SignalK for chainlength - replace mmsi with your own "self" vessel details
-                                      // sprintf(udpmessage, "{\"context\": \"vessels.urn: mrn: imo: mmsi:247074820 \",\"updates\": [{\"meta\":[{\"path\": \"navigation.anchor.chainlength\",\"value\": {\"units\": \"m\",\"description\": \"deployed chain length\",\"displayName\": \"Chain Length\",\"shortName\": \"DCL\"}}]}]}");
+      previousMillis = currentMillis; // Save the current time
+      char udpmessage1[1024];         // Next few lines send metadata to SignalK for pressure1 - replace with your own details
       sprintf(udpmessage1, "{\"updates\":[{\"$source\":\"ESP32.watermakerl\",\"values\":[{\"path\":\"environment.watermaker.Pressure.high\",\"value\":%f}]}]}", pressure1);
       Udp.beginPacket(ip1, outPort);
       Udp.write((uint8_t *)udpmessage1, strlen(udpmessage1)); //
       Udp.endPacket();
-      char udpmessage2[1024]; // Next few lines send metadata to SignalK for chainlength - replace mmsi with your own "self" vessel details
-                              // sprintf(udpmessage, "{\"context\": \"vessels.urn: mrn: imo: mmsi:247074820 \",\"updates\": [{\"meta\":[{\"path\": \"navigation.anchor.chainlength\",\"value\": {\"units\": \"m\",\"description\": \"deployed chain length\",\"displayName\": \"Chain Length\",\"shortName\": \"DCL\"}}]}]}");
+      char udpmessage2[1024];         // Next few lines send metadata to SignalK for pressure2 - replace with your own details
       sprintf(udpmessage2, "{\"updates\":[{\"$source\":\"ESP32.watermakerl\",\"values\":[{\"path\":\"environment.watermaker.Pressure.low\",\"value\":%f}]}]}", pressure2);
 
       Udp.beginPacket(ip1, outPort);
       Udp.write((uint8_t *)udpmessage2, strlen(udpmessage2)); //
       Udp.endPacket();
 
-      // Parpadea el LED
-      digitalWrite(LED_PIN, HIGH); // Enciende el LED
-      delay(100);                  // Espera 100 ms
-      digitalWrite(LED_PIN, LOW);  // Apaga el LED
+      // Blink the LED
+      digitalWrite(LED_PIN, HIGH); // Turn on the LED
+      delay(100);                  // Wait 100 ms
+      digitalWrite(LED_PIN, LOW);  // Turn off the LED
     }
   }
 }
+
