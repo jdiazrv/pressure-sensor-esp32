@@ -149,7 +149,7 @@ Please replace `url-to-circuit-overview` and `url-to-pcb-layout` with the actual
 Contributions to this project are welcome. Please fork the repository and submit a pull request with your changes.
 
 ## License
-![MIT License]((https://github.com/jdiazrv/8266-pressure-sensor/blob/main/LICENCE.md)https://github.com/jdiazrv/8266-pressure-sensor/blob/main/LICENCE.md)
+This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
 
 ## Contact
 - Juan Diaz   
