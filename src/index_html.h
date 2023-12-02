@@ -23,6 +23,7 @@ const char indexHTML[] PROGMEM = R"=====(
                 units: 'PSI',
                 title: 'Presión',
                 animationRule: 'linear'
+                 colorNeedle: '#FF5733'
             });
             // Establece el valor actual del medidor
             gauge.setValue(50);

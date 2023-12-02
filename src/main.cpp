@@ -1,7 +1,9 @@
+
+
+// Include necessary libraries
 #include <Wire.h>
 #include <Adafruit_ADS1x15.h>
 #include <SPI.h>
-#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFiManager.h>
@@ -12,7 +14,8 @@
 #include "index_html.h"
 #include "config_html.h" // Script for the configuration page
 #include <LittleFS.h>
-// These definitions are used if EEPROM values are empty or not valid
+
+// Default values for voltage and pressure, used if EEPROM values are empty or not valid
 #define MIN_VOLTAGE1 0.5
 #define MAX_VOLTAGE1 4.5
 #define MIN_PRESSURE1 0
@@ -22,19 +25,19 @@
 #define MIN_PRESSURE2 0
 #define MAX_PRESSURE2 15
 
-// EEPROM Addresses
+// EEPROM Addresses for storing configuration settings
 const int ADDRESSES[] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36};
 
-// OLED display
-//  OLED parameters
+// OLED display setup
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET 0 // Reset pin not used in this configuration
 #define WIFI_AP_STA 1
-#define LED_PIN D5                // LED to indicate if connected to Wi-Fi (off)
+#define LED_PIN D5                // LED pin for Wi-Fi connection indication
 unsigned long previousMillis = 0; // Stores the last time a UDP message was sent
-const long interval = 3000;       // Interval in milliseconds (3000 ms = 3 seconds)
+const long interval = 3000;       // Interval in milliseconds for sending UDP messages
 
+// Network and device configuration
 String hostName = "watermaker";
 float minVoltage1 = 0.5;
 float maxVoltage1 = 4.5;
@@ -47,55 +50,73 @@ float minPressure2 = 0;
 float maxPressure2 = 15;
 float pressure2;
 bool tryingToConnect = false;
-unsigned long startTime;           // Variable to store the start time of the connection attempt
-bool isFirstBoot = true;           // Variable to store if this is the first boot
-String ssid_sta = "enjoy";         // Set WLAN name for station connection
-String password_sta = "EmmO174.."; // Set password for station connection
-IPAddress ip1;                     // IP Address for SigalK to know where to send UDP messages - amend if different
-unsigned int outPort = 4210;       // and which port to send to
-Adafruit_ADS1115 ads;              // Use this for the 16-bit version (ADS1115)
+unsigned long startTime;           // Tracks the start time of Wi-Fi connection attempts
+bool isFirstBoot = true;           // Flag to check if it's the first boot
+String ssid_sta = "enjoy";         // WLAN name for station connection
+String password_sta = "EmmO174.."; // WLAN password for station connection
+IPAddress ip1;                     // IP address for SignalK server
+unsigned int outPort = 4210;       // UDP port for SignalK server communication
 
+// Initialize ADS1115 for reading analog values
+Adafruit_ADS1115 ads;
+
+// Initialize OLED display
 Adafruit_SSD1306 display(OLED_RESET);
-void drawScreen()
-{
+
+// Text size and position constants for the OLED display
+const int LargeTextSize = 2;
+const int SmallTextSize = 1;
+const int Pressure1YPosition = 0;
+const int Pressure2YPosition = 30;
+const int UnitXPosition = 54;
+const int UnitYOffset = 7;
+
+// Function to print text on the OLED display
+void printText(int textSize, int x, int y, String text) {
+  display.setTextSize(textSize);
+  display.setCursor(x, y);
+  display.print(text);
+}
+
+// Function to draw the screen with pressure values
+void drawScreen() {
   display.clearDisplay();
-  display.setTextSize(2);
-  display.setCursor(0, 0);
-  display.print(String(pressure1, 1));
-  display.setTextSize(1);
-  display.setCursor(54, 7);
-  display.print("b");
-  display.setTextSize(2);
-  display.setCursor(0, 30);
-  display.print(String(pressure2, 1));
-  display.setTextSize(1);
-  display.setCursor(54, 37);
-  display.print("b");
+
+  // Display pressure 1
+  printText(LargeTextSize, 0, Pressure1YPosition, String(pressure1, 1));
+  printText(SmallTextSize, UnitXPosition, Pressure1YPosition + UnitYOffset, "b");
+
+  // Display pressure 2
+  printText(LargeTextSize, 0, Pressure2YPosition, String(pressure2, 1));
+  printText(SmallTextSize, UnitXPosition, Pressure2YPosition + UnitYOffset, "b");
+
   display.display();
 }
 
+// Error check for OLED display height
 #if (SSD1306_LCDHEIGHT != 48)
 #error("Height incorrect, please fix Adafruit_SSD1306.h!");
 #endif
 
-ESP8266WebServer server(80); // Define Web Server on port 80 for general connection to central boat Wi-Fi
-WiFiManager wifiManager;
-WiFiUDP Udp;
-void Event_Index()
-{
+// Web server and network utilities initialization
+ESP8266WebServer server(80); // Web Server on port 80 for HTTP requests
+WiFiManager wifiManager;     // Handles Wi-Fi connection management
+WiFiUDP Udp;                 // UDP communication object
 
-  // If "http://<ip address>/" is requested
+// Event handler for the main page
+void Event_Index() {
+  // Handle request for the main page ("/")
 
   File file = LittleFS.open("/index.html", "r");
-  if (!file)
-  {
+  if (!file) {
+    // If the file is not found, send an error message
     Serial.println("Error opening index.html");
     server.send(404, "text/plain", "File not found");
 
+    // List all files in LittleFS (useful for debugging)
     Dir dir = LittleFS.openDir("/");
     Serial.println("Listing files in LittleFS:");
-    while (dir.next())
-    {
+    while (dir.next()) {
       File file = dir.openFile("r");
       Serial.print("File: ");
       Serial.print(dir.fileName());
@@ -107,13 +128,13 @@ void Event_Index()
     return;
   }
   server.streamFile(file, "text/html");
- // server.send(200, "text/html", indexHTML); // Send Index Website
+  // server.send(200, "text/html", indexHTML); // Alternative: Send index HTML directly
 }
 
-void writeEEPROM()
-{
-  if (maxVoltage1 > 1 && maxVoltage1 < 5 && maxPressure1 > 0.1 && maxPressure1 < 150)
-  {
+// Function to write configuration settings to EEPROM
+void writeEEPROM() {
+  if (maxVoltage1 > 1 && maxVoltage1 < 5 && maxPressure1 > 0.1 && maxPressure1 < 150) {
+    // Write values to EEPROM only if they are within valid ranges
     EEPROM.put(ADDRESSES[0], minVoltage1);
     EEPROM.put(ADDRESSES[1], maxVoltage1);
     EEPROM.put(ADDRESSES[2], minPressure1);
@@ -126,9 +147,9 @@ void writeEEPROM()
   }
 }
 
-void readEEPROM()
-{
-
+// Function to read configuration settings from EEPROM
+void readEEPROM() {
+  // Read values from EEPROM
   EEPROM.get(ADDRESSES[0], minVoltage1);
   EEPROM.get(ADDRESSES[1], maxVoltage1);
   EEPROM.get(ADDRESSES[2], minPressure1);
@@ -137,11 +158,9 @@ void readEEPROM()
   EEPROM.get(ADDRESSES[5], maxVoltage2);
   EEPROM.get(ADDRESSES[6], minPressure2);
   EEPROM.get(ADDRESSES[7], maxPressure2);
-  if (isnan(maxVoltage1) || isnan(maxPressure1) || maxVoltage1 <= 0 || maxVoltage1 > 5 || maxPressure1 > 150 || maxPressure1 <= 0)
-  {
-    // Code to execute if maxVoltage1 or maxPressure1 is NaN,
-    // or if any of the other conditions are met
-    // we assume the EEPROM is corrupted or not initialized and assign default values
+
+  // Check if the read values are valid, if not, set them to default values
+  if (isnan(maxVoltage1) || isnan(maxPressure1) || maxVoltage1 <= 0 || maxVoltage1 > 5 || maxPressure1 > 150 || maxPressure1 <= 0) {
     minVoltage1 = MIN_VOLTAGE1;
     maxVoltage1 = MAX_VOLTAGE1;
     minPressure1 = MIN_PRESSURE1;
@@ -154,26 +173,28 @@ void readEEPROM()
   }
 }
 
-
-void Event_pressure()
-{
+// Event handler for the pressure endpoint
+void Event_pressure() {
+  // Send pressure values as a JSON response
   String jsonResponse = "{\"pressure1\": " + String(pressure1) + ", \"pressure2\": " + String(pressure2) + "}";
   server.send(200, "application/json", jsonResponse);
   Serial.println(jsonResponse);
 }
 
-void Event_js()
-{
+// Event handler for serving JavaScript files
+void Event_js() {
+  // Serve gauge.min.js file for the web interface
+
   File file = LittleFS.open("/gauge.min.js", "r");
-  if (!file)
-  {
+  if (!file) {
+    // If the file is not found, send an error message
     Serial.println("Error opening gauge.min.js");
     server.send(404, "text/plain", "File not found");
 
+    // List all files in LittleFS (useful for debugging)
     Dir dir = LittleFS.openDir("/");
     Serial.println("Listing files in LittleFS:");
-    while (dir.next())
-    {
+    while (dir.next()) {
       File file = dir.openFile("r");
       Serial.print("File: ");
       Serial.print(dir.fileName());
@@ -184,18 +205,18 @@ void Event_js()
     }
     return;
   }
-
   server.streamFile(file, "application/javascript");
   file.close();
-
-  // If "http://<ip address>/" requested
-  // server.send(200, "text/html", indexHTML); // Send Index Website
+  // server.send(200, "text/html", indexHTML); // Alternative: Send index HTML directly
 }
 
-void Event_Submit()
-{
+// Event handler for saving configuration settings
+void Event_Submit() {
+  // Handle configuration submission and save new settings
+
   server.send(200, "text/html", "Configuration saved");
   Serial.println("Configuration saved");
+  // Print submitted values to the serial monitor (for debugging)
   Serial.println(server.arg("maxPressure1"));
   Serial.println(server.arg("minPressure1"));
   Serial.println(server.arg("minVdc1"));
@@ -204,6 +225,7 @@ void Event_Submit()
   Serial.println(server.arg("minPressure2"));
   Serial.println(server.arg("minVdc2"));
   Serial.println(server.arg("maxVdc2"));
+  // Update configuration settings with submitted
   maxPressure1 = server.arg("maxPressure1").toFloat();
   minPressure1 = server.arg("minPressure1").toFloat();
   minVoltage1 = server.arg("minVdc1").toFloat();
@@ -233,73 +255,56 @@ void Event_Config()
   htmlContent.replace(',', '.');
   server.send(200, "text/html", htmlContent);
 }
-/**
- * @brief This function is used to discover SignalK services.
- *
- * It attempts to find the service "signalk-ws" using the MDNS protocol.
- * The function makes multiple attempts and waits for a response before retrying.
- * If the service is found, the IP address of the service is returned.
- *
- * @return The IP address of the discovered SignalK service.
- */
-IPAddress discoverSignalKServices()
-{
-  IPAddress serviceIP;
-  if (isFirstBoot)
-  {
-    int maxAttempts = 5;
-    bool serviceFound = false;
+const int MaxDiscoveryAttempts = 5;
+const int DiscoveryRetryDelay = 1000; // Delay time in milliseconds
 
-    for (int attempt = 1; attempt <= maxAttempts; attempt++)
-    {
-      Serial.print("Intento ");
-      Serial.print(attempt);
-      Serial.println(" de buscar servicios 'signalk-ws'...");
+IPAddress tryDiscoverSignalKService() {
+  for (int attempt = 1; attempt <= MaxDiscoveryAttempts; attempt++) {
+    Serial.print("Attempt ");
+    Serial.print(attempt);
+    Serial.println(" to discover 'signalk-ws' services...");
 
-      unsigned long startDiscoveryTime = millis();
+    unsigned long startDiscoveryTime = millis();
+    int n = MDNS.queryService("signalk-ws", "tcp");
+    unsigned long endDiscoveryTime = millis();
 
-      // Buscar el servicio "signalk-ws" en el protocolo TCP
-      int n = MDNS.queryService("signalk-ws", "tcp");
+    Serial.print("Time taken for service discovery: ");
+    Serial.print(endDiscoveryTime - startDiscoveryTime);
+    Serial.println(" ms");
 
-      unsigned long endDiscoveryTime = millis();
-      Serial.print("Tiempo para descubrir servicios: ");
-      Serial.print(endDiscoveryTime - startDiscoveryTime);
-      Serial.println(" ms");
-
-      if (n == 0)
-      {
-        Serial.println("No se encontraron servicios 'signalk-ws'!");
-        if (attempt == maxAttempts)
-        {
-          Serial.println("Se han agotado los intentos para encontrar servicios 'signalk-ws'.");
-          break;
-        }
-        Serial.println("Reintentando...");
-        delay(1000); // Espera un segundo antes de reintentar
-      }
-      else
-      {
-        Serial.print("Se encontró servicio 'signalk-ws' en: ");
-        Serial.print(MDNS.IP(0));
-        Serial.print(":");
-        Serial.println(MDNS.port(0));
-        serviceIP = MDNS.IP(0);
-        serviceFound = true;
-        break;
-      }
+    if (n > 0) {
+      Serial.print("Found 'signalk-ws' service at: ");
+      Serial.print(MDNS.IP(0));
+      Serial.print(":");
+      Serial.println(MDNS.port(0));
+      return MDNS.IP(0);
     }
-    if (!serviceFound)
-    {
-      Serial.println("No se pudo encontrar el servicio 'signalk-ws' después de todos los intentos.");
+
+    Serial.println("No 'signalk-ws' services found!");
+    if (attempt < MaxDiscoveryAttempts) {
+      Serial.println("Retrying...");
+      delay(DiscoveryRetryDelay);
+    } else {
+      Serial.println("Exhausted all attempts to find 'signalk-ws' services.");
     }
   }
-  else // coming from reconecction after light sleep. ip1 already holds signalk IP
-  {
-    serviceIP = ip1;
-  }
-  Serial.println(serviceIP);
-  return serviceIP; // Devuelve la dirección IP del servicio descubierto
+  return IPAddress(); // Returns an empty IP if the service is not found
 }
+
+IPAddress discoverSignalKServices() {
+  Serial.println("Discovering SignalK services...");
+  IPAddress serviceIP;
+  if (isFirstBoot) {
+    serviceIP = tryDiscoverSignalKService();
+  } else {
+    serviceIP = ip1; // Coming from reconnection after light sleep. ip1 already holds signalk IP
+  }
+
+  Serial.println(serviceIP);
+  return serviceIP;
+}
+
+
 void handleConnected()
 {
   Serial.println("");
@@ -382,78 +387,45 @@ void setup()
 }
 
 
-void loop()
-{
-  int16_t adc0 = ads.readADC_SingleEnded(0); // Reading from channel 0
-  float voltage1 = adc0 * 0.1875 / 1000;     // Convert to voltage
-  int16_t adc1 = ads.readADC_SingleEnded(1); // Reading from channel 1
-  float voltage2 = adc1 * 0.1875 / 1000;     // Convert to voltage
+float readVoltage(int channel) {
+  int16_t adcValue = ads.readADC_SingleEnded(channel);
+  return adcValue * 0.1875 / 1000; // Convert to voltage
+}
 
-  // Mapping voltage to pressure
-  // Voltage from 0.5 to 4.5 V corresponds to 0 to 15 bar
-  pressure1 = ((voltage1 - minVoltage1) / (maxVoltage1 - minVoltage1)) * 
-              (maxPressure1 - minPressure1); // Adjust voltage range to pressure range
-  if (pressure1 < 0)
-  {
-    pressure1 = 0; // no negative pressure
-  }
+float mapVoltageToPressure(float voltage, float minVoltage, float maxVoltage, float minPressure, float maxPressure) {
+  float pressure = ((voltage - minVoltage) / (maxVoltage - minVoltage)) * (maxPressure - minPressure);
+  return pressure < 0 ? 0 : pressure; // Return 0 if pressure is negative
+}
 
-  pressure2 = ((voltage2 - minVoltage2) / (maxVoltage2 - minVoltage2)) * 
-              (maxPressure2 - minPressure2); // Adjust voltage range to pressure range
-  if (pressure2 < 0)
-  {
-    pressure2 = 0; // no negative pressure
-  }
-
-  drawScreen();
-  server.handleClient(); // Handle HTTP requests
-  if (WiFi.status() != WL_CONNECTED)
-  {
+void manageWiFiConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
     digitalWrite(LED_PIN, HIGH);
-    if (!tryingToConnect)
-    {
+    if (!tryingToConnect) {
       Serial.println("WiFi not connected, trying to reconnect");
       WiFi.begin(ssid_sta, password_sta);
       startTime = millis();
       tryingToConnect = true;
-    }
-    else if (millis() - startTime > 7000)
-    {
+    } else if (millis() - startTime > 7000) {
       Serial.println("Attempting WiFi autoconnect");
-      wifiManager.autoConnect("Windlass_AP", "12345678"); // password-protected AP
-      tryingToConnect = true;                             // Set true again for the next check
+      wifiManager.autoConnect("Windlass_AP", "12345678");
+      tryingToConnect = true;
     }
-  }
-  else if (tryingToConnect) // we were trying to connect and now we are connected
-  {
+  } else if (tryingToConnect) {
     Serial.println("Successfully reconnected to WiFi");
     handleConnected();
     digitalWrite(LED_PIN, LOW);
     tryingToConnect = false;
   }
-  else // we are connected to WiFi
-  {
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousMillis >= interval)
-    {
-      previousMillis = currentMillis; // Save the current time
-      char udpmessage1[1024];         // Next few lines send metadata to SignalK for pressure1 - replace with your own details
-      sprintf(udpmessage1, "{\"updates\":[{\"$source\":\"ESP32.watermakerl\",\"values\":[{\"path\":\"environment.watermaker.Pressure.high\",\"value\":%f}]}]}", pressure1);
-      Udp.beginPacket(ip1, outPort);
-      Udp.write((uint8_t *)udpmessage1, strlen(udpmessage1)); //
-      Udp.endPacket();
-      char udpmessage2[1024];         // Next few lines send metadata to SignalK for pressure2 - replace with your own details
-      sprintf(udpmessage2, "{\"updates\":[{\"$source\":\"ESP32.watermakerl\",\"values\":[{\"path\":\"environment.watermaker.Pressure.low\",\"value\":%f}]}]}", pressure2);
-
-      Udp.beginPacket(ip1, outPort);
-      Udp.write((uint8_t *)udpmessage2, strlen(udpmessage2)); //
-      Udp.endPacket();
-
-      // Blink the LED
-      digitalWrite(LED_PIN, HIGH); // Turn on the LED
-      delay(100);                  // Wait 100 ms
-      digitalWrite(LED_PIN, LOW);  // Turn off the LED
-    }
-  }
 }
 
+void loop() {
+  float voltage1 = readVoltage(0);
+  float voltage2 = readVoltage(1);
+
+   pressure1 = mapVoltageToPressure(voltage1, minVoltage1, maxVoltage1, minPressure1, maxPressure1);
+   pressure2 = mapVoltageToPressure(voltage2, minVoltage2, maxVoltage2, minPressure2, maxPressure2);
+
+  drawScreen();
+  server.handleClient();
+  manageWiFiConnection();
+}
