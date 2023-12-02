@@ -149,7 +149,7 @@ Please replace `url-to-circuit-overview` and `url-to-pcb-layout` with the actual
 Contributions to this project are welcome. Please fork the repository and submit a pull request with your changes.
 
 ## License
-[MIT License](LICENSE)
+This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
 
 ## Contact
 - Juan Diaz   
