@@ -137,8 +137,8 @@ Aisler offers quality PCB manufacturing services, ensuring that the PCBs are pro
 
 For assembly and verification, high-resolution images of the circuit design are made available:
 
-- ![Circuit Overview](url-to-circuit-overview)
-- ![PCB Layout](url-to-pcb-layout)
+- ![Circuit Overview](Schematics.png)
+- ![PCB Layout](PCB)
 
 Please replace `url-to-circuit-overview` and `url-to-pcb-layout` with the actual links to the images where they are hosted.
 
