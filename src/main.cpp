@@ -11,9 +11,10 @@
 #include <WiFiUdp.h>
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
-#include "index_html.h"
 #include "config_html.h" // Script for the configuration page
 #include <LittleFS.h>
+#include <ArduinoOTA.h> // to update OVER THE AIR (OTA)
+#include "ESP8266_Utils_OTA.hpp"
 
 // Default values for voltage and pressure, used if EEPROM values are empty or not valid
 #define MIN_VOLTAGE1 0.5
@@ -38,7 +39,7 @@ unsigned long previousMillis = 0; // Stores the last time a UDP message was sent
 const long interval = 3000;       // Interval in milliseconds for sending UDP messages
 
 // Network and device configuration
-String hostName = "watermaker";
+const char *hostName = "watermaker"; // IMPORTANT hostName has to be char in order to work.
 float minVoltage1 = 0.5;
 float maxVoltage1 = 4.5;
 float minPressure1 = 0;
@@ -49,6 +50,7 @@ float maxVoltage2 = 4.5;
 float minPressure2 = 0;
 float maxPressure2 = 15;
 float pressure2;
+long unsigned int intervalForAP = 10000; // interval if wifi connection is not achieve to start AP
 bool tryingToConnect = false;
 unsigned long startTime;           // Tracks the start time of Wi-Fi connection attempts
 bool isFirstBoot = true;           // Flag to check if it's the first boot
@@ -72,14 +74,16 @@ const int UnitXPosition = 54;
 const int UnitYOffset = 7;
 
 // Function to print text on the OLED display
-void printText(int textSize, int x, int y, String text) {
+void printText(int textSize, int x, int y, String text)
+{
   display.setTextSize(textSize);
   display.setCursor(x, y);
   display.print(text);
 }
 
 // Function to draw the screen with pressure values
-void drawScreen() {
+void drawScreen()
+{
   display.clearDisplay();
 
   // Display pressure 1
@@ -104,11 +108,13 @@ WiFiManager wifiManager;     // Handles Wi-Fi connection management
 WiFiUDP Udp;                 // UDP communication object
 
 // Event handler for the main page
-void Event_Index() {
+void Event_Index()
+{
   // Handle request for the main page ("/")
 
   File file = LittleFS.open("/index.html", "r");
-  if (!file) {
+  if (!file)
+  {
     // If the file is not found, send an error message
     Serial.println("Error opening index.html");
     server.send(404, "text/plain", "File not found");
@@ -116,7 +122,8 @@ void Event_Index() {
     // List all files in LittleFS (useful for debugging)
     Dir dir = LittleFS.openDir("/");
     Serial.println("Listing files in LittleFS:");
-    while (dir.next()) {
+    while (dir.next())
+    {
       File file = dir.openFile("r");
       Serial.print("File: ");
       Serial.print(dir.fileName());
@@ -132,8 +139,10 @@ void Event_Index() {
 }
 
 // Function to write configuration settings to EEPROM
-void writeEEPROM() {
-  if (maxVoltage1 > 1 && maxVoltage1 < 5 && maxPressure1 > 0.1 && maxPressure1 < 150) {
+void writeEEPROM()
+{
+  if (maxVoltage1 > 1 && maxVoltage1 < 5 && maxPressure1 > 0.1 && maxPressure1 < 150)
+  {
     // Write values to EEPROM only if they are within valid ranges
     EEPROM.put(ADDRESSES[0], minVoltage1);
     EEPROM.put(ADDRESSES[1], maxVoltage1);
@@ -148,7 +157,8 @@ void writeEEPROM() {
 }
 
 // Function to read configuration settings from EEPROM
-void readEEPROM() {
+void readEEPROM()
+{
   // Read values from EEPROM
   EEPROM.get(ADDRESSES[0], minVoltage1);
   EEPROM.get(ADDRESSES[1], maxVoltage1);
@@ -160,7 +170,8 @@ void readEEPROM() {
   EEPROM.get(ADDRESSES[7], maxPressure2);
 
   // Check if the read values are valid, if not, set them to default values
-  if (isnan(maxVoltage1) || isnan(maxPressure1) || maxVoltage1 <= 0 || maxVoltage1 > 5 || maxPressure1 > 150 || maxPressure1 <= 0) {
+  if (isnan(maxVoltage1) || isnan(maxPressure1) || maxVoltage1 <= 0 || maxVoltage1 > 5 || maxPressure1 > 150 || maxPressure1 <= 0)
+  {
     minVoltage1 = MIN_VOLTAGE1;
     maxVoltage1 = MAX_VOLTAGE1;
     minPressure1 = MIN_PRESSURE1;
@@ -174,7 +185,8 @@ void readEEPROM() {
 }
 
 // Event handler for the pressure endpoint
-void Event_pressure() {
+void Event_pressure()
+{
   // Send pressure values as a JSON response
   String jsonResponse = "{\"pressure1\": " + String(pressure1) + ", \"pressure2\": " + String(pressure2) + "}";
   server.send(200, "application/json", jsonResponse);
@@ -182,11 +194,13 @@ void Event_pressure() {
 }
 
 // Event handler for serving JavaScript files
-void Event_js() {
+void Event_js()
+{
   // Serve gauge.min.js file for the web interface
 
   File file = LittleFS.open("/gauge.min.js", "r");
-  if (!file) {
+  if (!file)
+  {
     // If the file is not found, send an error message
     Serial.println("Error opening gauge.min.js");
     server.send(404, "text/plain", "File not found");
@@ -194,7 +208,8 @@ void Event_js() {
     // List all files in LittleFS (useful for debugging)
     Dir dir = LittleFS.openDir("/");
     Serial.println("Listing files in LittleFS:");
-    while (dir.next()) {
+    while (dir.next())
+    {
       File file = dir.openFile("r");
       Serial.print("File: ");
       Serial.print(dir.fileName());
@@ -211,7 +226,8 @@ void Event_js() {
 }
 
 // Event handler for saving configuration settings
-void Event_Submit() {
+void Event_Submit()
+{
   // Handle configuration submission and save new settings
 
   server.send(200, "text/html", "Configuration saved");
@@ -258,8 +274,10 @@ void Event_Config()
 const int MaxDiscoveryAttempts = 5;
 const int DiscoveryRetryDelay = 1000; // Delay time in milliseconds
 
-IPAddress tryDiscoverSignalKService() {
-  for (int attempt = 1; attempt <= MaxDiscoveryAttempts; attempt++) {
+IPAddress tryDiscoverSignalKService()
+{
+  for (int attempt = 1; attempt <= MaxDiscoveryAttempts; attempt++)
+  {
     Serial.print("Attempt ");
     Serial.print(attempt);
     Serial.println(" to discover 'signalk-ws' services...");
@@ -272,7 +290,8 @@ IPAddress tryDiscoverSignalKService() {
     Serial.print(endDiscoveryTime - startDiscoveryTime);
     Serial.println(" ms");
 
-    if (n > 0) {
+    if (n > 0)
+    {
       Serial.print("Found 'signalk-ws' service at: ");
       Serial.print(MDNS.IP(0));
       Serial.print(":");
@@ -281,22 +300,29 @@ IPAddress tryDiscoverSignalKService() {
     }
 
     Serial.println("No 'signalk-ws' services found!");
-    if (attempt < MaxDiscoveryAttempts) {
+    if (attempt < MaxDiscoveryAttempts)
+    {
       Serial.println("Retrying...");
       delay(DiscoveryRetryDelay);
-    } else {
+    }
+    else
+    {
       Serial.println("Exhausted all attempts to find 'signalk-ws' services.");
     }
   }
   return IPAddress(); // Returns an empty IP if the service is not found
 }
 
-IPAddress discoverSignalKServices() {
+IPAddress discoverSignalKServices()
+{
   Serial.println("Discovering SignalK services...");
   IPAddress serviceIP;
-  if (isFirstBoot) {
+  if (isFirstBoot)
+  {
     serviceIP = tryDiscoverSignalKService();
-  } else {
+  }
+  else
+  {
     serviceIP = ip1; // Coming from reconnection after light sleep. ip1 already holds signalk IP
   }
 
@@ -304,6 +330,14 @@ IPAddress discoverSignalKServices() {
   return serviceIP;
 }
 
+void sendPressureUpdate(IPAddress ip, int port, const char *path, float pressure)
+{
+  char udpMessage[1024];
+  sprintf(udpMessage, "{\"updates\":[{\"$source\":\"ESP32.watermakerl\",\"values\":[{\"path\":\"%s\",\"value\":%f}]}]}", path, pressure);
+  Udp.beginPacket(ip, port);
+  Udp.write(reinterpret_cast<uint8_t *>(udpMessage), strlen(udpMessage));
+  Udp.endPacket();
+}
 
 void handleConnected()
 {
@@ -313,7 +347,7 @@ void handleConnected()
   Serial.println(WiFi.localIP());
   Serial.print("Host Name: ");
   Serial.println(WiFi.getHostname());
-  if (!MDNS.begin("windlass"))
+  if (!MDNS.begin(hostName))
   {
     Serial.println("Error al iniciar mDNS");
     return;
@@ -328,16 +362,8 @@ void handleConnected()
   // Udp.begin(WiFi.localIP(), outPort);
 
   Serial.printf("Now listening at IP %s, UDP port %d\n", WiFi.localIP().toString().c_str(), outPort);
-  char udpmessage1[1024]; // Next few lines send metadata to SignalK for chainlength - replace mmsi with your own "self" vessel details
-                          // sprintf(udpmessage, "{\"context\": \"vessels.urn: mrn: imo: mmsi:247074820 \",\"updates\": [{\"meta\":[{\"path\": \"navigation.anchor.chainlength\",\"value\": {\"units\": \"m\",\"description\": \"deployed chain length\",\"displayName\": \"Chain Length\",\"shortName\": \"DCL\"}}]}]}");
-  sprintf(udpmessage1, "{\"updates\":[{\"$source\":\"ESP32.watermakerl\",\"values\":[{\"path\":\"environment.watermaker.Pressure.high\",\"value\":%f}]}]}", pressure1);
-
-  Udp.beginPacket(ip1, outPort);
-  Udp.write((uint8_t *)udpmessage1, strlen(udpmessage1)); //
-  Udp.printf("Seconds since boot: %lu", millis() / 1000);
-  Udp.endPacket();
-  Serial.print("Metadata sent to SignalK: ");
-  Serial.println(udpmessage1);
+  sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.high", pressure1);
+  sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.low", pressure2);
   drawScreen(); // we show the signalk server address on the screen
 }
 
@@ -355,12 +381,12 @@ void setup()
   readEEPROM();
   Serial.print("Reading EEPROM for the first time...");
   Serial.println(maxPressure1);
-  WiFi.hostname(hostName); // setting it via mdns (later on) only works for AP mode
+  WiFi.hostname(hostName); // Set device hostname
   tryingToConnect = true;
   String chkPassword = WiFi.psk();
   if (chkPassword.length() == 0)
   {
-    wifiManager.autoConnect("Windlass_AP", "12345678"); // password protected ap
+    wifiManager.autoConnect("watermaker_AP", "12345678"); // password protected ap
   }
   else
   {
@@ -379,53 +405,78 @@ void setup()
   server.on("/gauge.min.js", Event_js); // when index_html calls for gauge.min.js we need to serve it.
   server.on("/config", HTTP_GET, Event_Config);
   server.on("/submit", HTTP_POST, Event_Submit);
-  server.on("/pressure", HTTP_GET, []() {
+  server.on("/pressure", HTTP_GET, []()
+            {
     server.sendHeader("Access-Control-Allow-Origin", "*");
-    Event_pressure();});
+    Event_pressure(); });
   server.begin();
   Serial.println("HTTP Server started");
 }
 
-
-float readVoltage(int channel) {
-  int16_t adcValue = ads.readADC_SingleEnded(channel);
-  return adcValue * 0.1875 / 1000; // Convert to voltage
+float adcToVoltage(int16_t adcValue)
+{
+  return static_cast<float>(adcValue) * 0.1875 / 1000.0;
 }
-
-float mapVoltageToPressure(float voltage, float minVoltage, float maxVoltage, float minPressure, float maxPressure) {
+float mapToPressure(float voltage, float minVoltage, float maxVoltage, float minPressure, float maxPressure)
+{
   float pressure = ((voltage - minVoltage) / (maxVoltage - minVoltage)) * (maxPressure - minPressure);
-  return pressure < 0 ? 0 : pressure; // Return 0 if pressure is negative
+  return (pressure < 0) ? 0 : pressure;
 }
 
-void manageWiFiConnection() {
-  if (WiFi.status() != WL_CONNECTED) {
+void loop()
+{
+  ArduinoOTA.handle();                       // por si actualizamos el codigo Over The Air
+  MDNS.update();                             // Check to see if browser is looking for IP address
+  int16_t adc0 = ads.readADC_SingleEnded(0); // Reading from channel 0
+  int16_t adc1 = ads.readADC_SingleEnded(1); // Reading from channel 1
+
+  float voltage1 = adcToVoltage(adc0);
+  float voltage2 = adcToVoltage(adc1);
+
+  pressure1 = mapToPressure(voltage1, minVoltage1, maxVoltage1, minPressure1, maxPressure1);
+  pressure2 = mapToPressure(voltage2, minVoltage2, maxVoltage2, minPressure2, maxPressure2);
+
+  drawScreen();
+  server.handleClient(); // Handle HTTP requests
+  if (WiFi.status() != WL_CONNECTED)
+  {
     digitalWrite(LED_PIN, HIGH);
-    if (!tryingToConnect) {
+    if (!tryingToConnect)
+    {
       Serial.println("WiFi not connected, trying to reconnect");
       WiFi.begin(ssid_sta, password_sta);
       startTime = millis();
       tryingToConnect = true;
-    } else if (millis() - startTime > 7000) {
-      Serial.println("Attempting WiFi autoconnect");
-      wifiManager.autoConnect("Windlass_AP", "12345678");
-      tryingToConnect = true;
     }
-  } else if (tryingToConnect) {
+    else if (millis() - startTime > intervalForAP) // si no hay red en intervalForAP pasa al modo AP
+    {
+      Serial.println("Attempting WiFi autoconnect");
+      wifiManager.autoConnect("watermaker_AP", "12345678"); // password-protected AP
+      tryingToConnect = true;                               // Set true again for the next check
+    }
+  }
+  else if (tryingToConnect) // we were trying to connect and now we are connected
+  {
     Serial.println("Successfully reconnected to WiFi");
     handleConnected();
     digitalWrite(LED_PIN, LOW);
     tryingToConnect = false;
+    ArduinoOTA.setHostname(hostName);
+    InitOTA();
   }
-}
+  else // we are connected to WiFi
+  {
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousMillis >= interval)
+    {
+      previousMillis = currentMillis; // Save the current time
+      sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.high", pressure1);
+      sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.low", pressure2);
 
-void loop() {
-  float voltage1 = readVoltage(0);
-  float voltage2 = readVoltage(1);
-
-   pressure1 = mapVoltageToPressure(voltage1, minVoltage1, maxVoltage1, minPressure1, maxPressure1);
-   pressure2 = mapVoltageToPressure(voltage2, minVoltage2, maxVoltage2, minPressure2, maxPressure2);
-
-  drawScreen();
-  server.handleClient();
-  manageWiFiConnection();
+      // Blink the LED
+      digitalWrite(LED_PIN, HIGH); // Turn on the LED
+      delay(100);                  // Wait 100 ms
+      digitalWrite(LED_PIN, LOW);  // Turn off the LED
+    }
+  }
 }

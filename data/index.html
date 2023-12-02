@@ -1,5 +1,6 @@
 <!doctype html>
 <html>
+
 <head>
   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
   <title>Gauge Test</title>
@@ -9,193 +10,154 @@
       margin: 0;
       background: #fff;
     }
+
     h2 {
-      text-align: center; /* Centrar el título */
+      text-align: center;
+      /* Centrar el título */
     }
+
     .canvas-container {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: space-around;
     }
+
     .canvas-title {
       text-align: center;
       font-size: 24px;
     }
 
-  /* Media query para pantallas pequeñas */
-  @media (max-width: 700px) {
+    /* Media query para pantallas pequeñas */
+    @media (max-width: 700px) {
       canvas {
-        width: 100%; /* Ajustar al ancho disponible */
-        height: auto; /* Maintain the canvas aspect ratio */
-              }
-              .canvas-title {
-                font-size: 20px; /* Slightly larger font size */
+        width: 100%;
+        /* Ajustar al ancho disponible */
+        height: auto;
+        /* Maintain the canvas aspect ratio */
+      }
 
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <button onclick="animateGauges()">Animate</button>
-          <button onclick="stopGaugesAnimation()">Stop animation</button>
+      .canvas-title {
+        font-size: 20px;
+        /* Slightly larger font size */
 
-          <hr>
-          <h2>MAB WaterMaker</h2>
-          <div class="canvas-container">
-            <canvas 
-            data-type="radial-gauge" 
-            data-value="3" 
-            data-width="700" 
-            data-height="700" 
-            data-bar-width="10"
-            data-bar-shadow="5" 
-            data-color-bar-progress="rgba(50,200,50,.75)" 
-            data-min-value="0"
-            data-max-value="4"
-            data-units="bar"
-            data-title="Low Pressure"
-            data-minor-ticks="5"
-            data-major-ticks="0,1,2,3,4"
-            data-bar-start-position="left"
-            data-highlights='[
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <button onclick="animateGauges()">Animate</button>
+  <button onclick="stopGaugesAnimation()">Stop animation</button>
+
+  <hr>
+  <h2>MAB WaterMaker</h2>
+  <div class="canvas-container">
+    <canvas data-type="radial-gauge" data-value="3" data-width="700" data-height="700" data-bar-width="10"
+      data-bar-shadow="5" data-color-bar-progress="rgba(50,200,50,.75)" data-min-value="0" data-max-value="4"
+      data-units="bar" data-title="Low Pressure" data-minor-ticks="5" data-major-ticks="0,1,2,3,4"
+      data-bar-start-position="left"   // Color rojo fosforescente para la aguja data-highlights='[
             { "from": 0, "to": 1, "color": "rgba(255,165,0, .5)" },  
             { "from": 1, "to": 3, "color": "rgba(0,128,0, .5)" },   
             { "from": 3, "to": 4, "color": "rgba(255,0,0, .5)" }  
-          ]'
-                      data-major-ticks="1,2,3,4,"
-                      data-bar-start-position="left">
-                    </canvas>
-                    <div style="height: 20px;"></div> <!-- 20px space between the canvases -->
-                    <canvas 
-                    data-type="radial-gauge" 
-                    data-value="40" 
-                    data-width="700" 
-                    data-height="700" 
-                    data-bar-width="10"
-                    data-bar-shadow="5" 
-                    data-color-bar-progress="rgba(50,200,50,.75)" 
-                    data-min-value="0"
-                    data-max-value="70"
-                    data-units="bar"
-                    data-title="High Pressure"
-                    data-minor-ticks="5"
-                    data-major-ticks="0,10,20,30,40,50,60,70"
-                    data-bar-start-position="left"
-                    data-highlights='[
+          ]' data-major-ticks="1,2,3,4," data-bar-start-position="left">
+    </canvas>
+    <div style="height: 20px;"></div> <!-- 20px space between the canvases -->
+    <canvas data-type="radial-gauge" data-value="40" data-width="700" data-height="700" data-bar-width="10"
+      data-bar-shadow="5" data-color-bar-progress="rgba(50,200,50,.75)" data-min-value="0" data-max-value="70"
+      data-units="bar" data-title="High Pressure" data-minor-ticks="5" data-major-ticks="0,10,20,30,40,50,60,70"
+      data-bar-start-position="left" data-highlights='[
                     { "from": 0, "to": 50, "color": "rgba(255,165,0, .5)" },  
                     { "from": 50, "to": 57, "color": "rgba(0,128,0, .5)" },   
                     { "from": 57, "to": 60, "color": "rgba(255,165,0, .5)" },   
                     { "from": 60, "to": 70, "color": "rgba(255,0,0, .5)" }
-                  ]'
-                  ></canvas>
-                    </div>
+                  ]'></canvas>
+  </div>
 
+  <script async src="gauge.min.js"></script>
+  <!-- The rest of the script remains the same -->
 
+  <script>
+    if (!Array.prototype.forEach) {
+      Array.prototype.forEach = function(cb) {
+        var i = 0,
+          s = this.length;
+        for (; i < s; i++) {
+          cb && cb(this[i], i, this);
+        }
+      }
+    }
+    document.fonts && document.fonts.forEach(function(font) {
+      font.loaded.then(function() {
+        if (font.family.match(/Led/)) {
+          document.gauges.forEach(function(gauge) {
+            gauge.update();
+          });
+        }
+      });
+    });
+    var timers = [];
 
-                    <script async src="gauge.min.js"></script>
-                    <!-- The rest of the script remains the same -->
+    function animateGauges() {
+      document.gauges.forEach(function(gauge) {
+        timers.push(setInterval(function() {
+          var min = gauge.options.minValue + 0;
+          var max = gauge.options.maxValue + 4;
+          gauge.value = min + Math.random() * (max - min);
+        }, gauge.animation.duration + 50));
+      });
+    }
 
-                  <script>
-                    if (!Array.prototype.forEach) {
-                      Array.prototype.forEach = function (cb) {
-                        var i = 0, s = this.length;
-                        for (; i < s; i++) {
-                          cb && cb(this[i], i, this);
-                        }
-                      }
-                    }
+    function stopGaugesAnimation() {
+      timers.forEach(function(timer) {
+        clearInterval(timer);
+        la
+      });
+    }
 
-                    document.fonts && document.fonts.forEach(function (font) {
-                      font.loaded.then(function () {
-                        if (font.family.match(/Led/)) {
-                          document.gauges.forEach(function (gauge) {
-                            gauge.update();
-                          });
-                        }
-                      });
-                    });
+    function updateGauges() {
+      var xhr = new XMLHttpRequest();
+      xhr.onreadystatechange = function() {
+        if (this.readyState == 4 && this.status == 200) {
+          try {
+            var data = JSON.parse(this.responseText);
+            var gauge1 = document.querySelector('[data-title="Low Pressure"]');
+            var gauge2 = document.querySelector('[data-title="High Pressure"]');
+            var pressure1Div = document.getElementById('pressure1');
+            var pressure2Div = document.getElementById('pressure2');
+            if (gauge1 && gauge2) {
+              if (data.hasOwnProperty('pressure1') && data.hasOwnProperty('pressure2')) {
+                gauge1.setAttribute('data-value', data.pressure1);
+                gauge2.setAttribute('data-value', data.pressure2);
+                // Update the text of the divs with the new pressure values
+                pressure1Div.textContent = 'Pressure 1: ' + data.pressure1;
+                pressure2Div.textContent = 'Pressure 2: ' + data.pressure2;
+                // Refresh the gauges after updating the values
+                document.gauges.forEach(function(gauge) {
+                  gauge.update();
+                });
+              } else {
+                console.error("Invalid data received from server: missing pressure1 or pressure2");
+              }
+            }
+          } catch (e) {
+            console.error("Error parsing server response: ", e);
+          }
+        }
+      };
+      xhr.onerror = function() {
+        console.error("Request failed");
+      };
+      try {
+        xhr.open("GET", "http://watermaker.local/pressure", true); // Replace with your server URL
+        xhr.send();
+      } catch (e) {
+        console.error("Error sending request: ", e);
+      }
+    }
+    setInterval(updateGauges, 2000); // Update the gauges every 2 seconds
+  </script>
 
-                    var timers = [];
+</body>
 
-                    function animateGauges() {
-                      document.gauges.forEach(function (gauge) {
-                        timers.push(setInterval(function () {
-                          var min = gauge.options.minValue +0;
-                          var max = gauge.options.maxValue + 4;
-
-                          gauge.value = min + Math.random() * (max - min);
-                        }, gauge.animation.duration + 50));
-                      });
-                    }
-
-                    function stopGaugesAnimation() {
-                      timers.forEach(function (timer) {
-                        clearInterval(timer);la
-                      });
-                    }
-                   function updateGauges() {
-                      var xhr = new XMLHttpRequest();
-                      xhr.onreadystatechange = function() {
-                          if (this.readyState == 4 && this.status == 200) {
-                              try {
-                                  var data = JSON.parse(this.responseText);
-                                  var gauge1 = document.querySelector('[data-title="Low Pressure"]');
-                                  var gauge2 = document.querySelector('[data-title="High Pressure"]');
-                                  var pressure1Div = document.getElementById('pressure1');
-                                  var pressure2Div = document.getElementById('pressure2');
-                                  if (gauge1 && gauge2) {
-                                      if (data.hasOwnProperty('pressure1') && data.hasOwnProperty('pressure2')) {
-                                          gauge1.setAttribute('data-value', data.pressure1);
-                                          gauge2.setAttribute('data-value', data.pressure2);
-                                          // Update the text of the divs with the new pressure values
-                                          pressure1Div.textContent = 'Pressure 1: ' + data.pressure1;
-                                          pressure2Div.textContent = 'Pressure 2: ' + data.pressure2;
-                                          // Refresh the gauges after updating the values
-                                          document.gauges.forEach(function(gauge) {
-                                              gauge.update();
-                                          });
-                                      } else {
-                                          console.error("Invalid data received from server: missing pressure1 or pressure2");
-                                      }
-                                  }
-                              console.error("Error parsing server response: ", e);
-                                    }
-                                  }
-                                };
-                                xhr.onerror = function() {
-                                  console.error("Request failed");
-                                };
-                                try {
-                                  xhr.open("GET", "http://192.168.68.66/pressure", true); // Replace with your server URL
-                                  xhr.send();
-                                } catch (e) {
-                                  console.error("Error sending request: ", e);
-                                }
-                              }
-                              setInterval(updateGauges, 2000); // Update the gauges every 2 seconds
-                              </script>
-
-                              </body>
-
-                              </html>
-                                  console.error("Error parsing server response: ", e);
-                              }
-                          }
-                      };
-                      xhr.onerror = function() {
-                          console.error("Request failed");
-                      };
-                      try {
-                          xhr.open("GET", "http://192.168.68.66/pressure", true); // Replace with your server URL
-                          xhr.send();
-                      } catch (e) {
-                          console.error("Error sending request: ", e);
-                      }
-                  }
-                  setInterval(updateGauges, 2000); // Update the gauges every 2 seconds
-                  </script>
-
-                  </body>
-
-                  </html>
+</html>

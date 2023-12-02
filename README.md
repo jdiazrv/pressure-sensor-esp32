@@ -54,7 +54,8 @@ This repository contains the source code for an Arduino-based IoT project design
 - LittleFS Library.
 
 ## Installation
-1## Installation
+
+## Installation Steps
 
 1. **Clone or Download the Repository**
    - Clone this repository to your local machine or download the source code.
@@ -78,6 +79,11 @@ This repository contains the source code for an Arduino-based IoT project design
 6. **Compile and Upload**
    - Use the PlatformIO IDE toolbar within VS Code to compile and upload the sketch to your board.
    - Monitor the output console in VS Code for any errors and to confirm a successful upload.
+
+7. **Upload Additional Files**
+   - After uploading the code, you must upload additional files such as `index.html` and `gauge.min.js` (JavaScript) to the ESP8266's Filesystem. This is necessary for your project.
+   - To upload these files, click on the "Upload Filesystem Image" option in PlatformIO. **Before doing this, make sure to close any PlatformIO terminals to avoid port-related errors.**
+
 
 ## WiFi Connectivity and Network Behavior
 - If the device cannot connect to a pre-configured WiFi network, it automatically creates an Access Point (AP) with the SSID `Windlass_AP`. Users can connect to this AP to select the working WiFi network.
