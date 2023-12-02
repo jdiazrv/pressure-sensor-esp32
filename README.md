@@ -152,5 +152,5 @@ Contributions to this project are welcome. Please fork the repository and submit
 [MIT License](LICENSE)
 
 ## Contact
-- Your Name
-- Your Contact Information (optional)
+- Juan Diaz   
+
