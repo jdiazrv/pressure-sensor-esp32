@@ -143,10 +143,6 @@ For assembly and verification, high-resolution images of the circuit design are 
 - ![Circuit Overview](https://github.com/jdiazrv/8266-pressure-sensor/blob/main/Schematics.png?raw=true)
 - ![PCB Layout](https://github.com/jdiazrv/8266-pressure-sensor/blob/main/PCB.png?raw=true)
 
-- ![Circuit Overview](https://github.com/jdiazrv/8266-pressure-sensor/blob/main/gauges.jpeg?raw=true)
-- ![PCB Layout](PCB)
-
-
 Please replace `url-to-circuit-overview` and `url-to-pcb-layout` with the actual links to the images where they are hosted.
 
 ## Contributing
