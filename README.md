@@ -173,7 +173,6 @@ For assembly and verification, high-resolution images of the circuit design are 
 - ![Circuit Overview][def3]
 - ![PCB Layout][def2]
 
-
 ## Contributing
 Contributions to this project are welcome. Please fork the repository and submit a pull request with your changes.
 
