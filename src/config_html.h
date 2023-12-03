@@ -1,5 +1,5 @@
 const char *configPageHTML = R"rawliteral(
-<!DOCTYPE html>
+<<!DOCTYPE html>
 <html>
 
 <head>
@@ -16,12 +16,12 @@ const char *configPageHTML = R"rawliteral(
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
+            height: auto;
         }
 
         .container {
             background: white;
-            padding: 20px;
+            padding: 18px;
             border-radius: 8px;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
         }
@@ -29,15 +29,21 @@ const char *configPageHTML = R"rawliteral(
         h1 {
             text-align: center;
             color: #333;
+            font-size: 24px;
+            margin-bottom: 6px 
         }
 
         .sensor-config {
-            margin-bottom: 20px;
+        
+        	margin-top: 5px;
+            margin-bottom: 10px;
+            font-size: 16px; /
+        
         }
 
         .sensor-config h2 {
             color: #333;
-            margin-bottom: 10px;
+            margin-bottom: 5px;
         }
 
         .sensor-config label {
@@ -48,9 +54,10 @@ const char *configPageHTML = R"rawliteral(
         }
 
         .sensor-config input {
-            width: 100px;
-            padding: 8px;
-            margin: 0 0 10px;
+            width: 70px;
+            padding: 4px;
+            margin: 0 0 5px;
+            font-size:14px;
         }
 
         input[type="submit"] {
@@ -59,14 +66,24 @@ const char *configPageHTML = R"rawliteral(
             background-color: #1fa3ec;
             color: white;
             border: none;
-            padding: 10px;
-            margin-top: 20px;
+            padding: 5px;
+            margin-top: 15px;
             cursor: pointer;
             font-size: 16px;
+        }
+             #wifiMode {
+            margin-bottom: 5px;
+            font-size: 18px;
         }
 
         input[type="submit"]:hover {
             background-color: #0056b3;
+        }
+
+        /* Modificar el tamaño de la caja de texto del AP Password */
+        #apPassword {
+            width: 200px; /* Ajusta el ancho según tus necesidades */
+            height: 40px; /* Ajusta la altura según tus necesidades */
         }
     </style>
     <script>
