@@ -43,27 +43,51 @@
 
       }
     }
+
+    /* Style for the settings button */
+    .button {
+      background-color: #ffffff;
+      border-radius: 1px;
+      border: none;
+      color: black;
+      padding: 16px 20px;
+      /* Double the padding */
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 40px;
+      /* Double the font size */
+      margin: 1px 2px;
+      cursor: pointer;
+      position: absolute;
+      /* Position the button absolutely */
+      right: 5px;
+      /* 5px from the right margin */
+    }
+  </style>
   </style>
 </head>
 
 <body>
+
   <button onclick="animateGauges()">Animate</button>
   <button onclick="stopGaugesAnimation()">Stop animation</button>
 
   <hr>
   <h2>MAB WaterMaker</h2>
+  <input type="button" class="button" value="⚙️" onclick="window.location='/config'">
   <div class="canvas-container">
-    <canvas data-type="radial-gauge" data-value="3" data-width="700" data-height="700" data-bar-width="10"
+    <canvas data-type="radial-gauge" data-value="3" data-width="650" data-height="650" data-bar-width="10"
       data-bar-shadow="5" data-color-bar-progress="rgba(50,200,50,.75)" data-min-value="0" data-max-value="4"
       data-units="bar" data-title="Low Pressure" data-minor-ticks="5" data-major-ticks="0,1,2,3,4"
-      data-bar-start-position="left"   // Color rojo fosforescente para la aguja data-highlights='[
+      data-bar-start-position="left" // Color rojo fosforescente para la aguja data-highlights='[
             { "from": 0, "to": 1, "color": "rgba(255,165,0, .5)" },  
             { "from": 1, "to": 3, "color": "rgba(0,128,0, .5)" },   
             { "from": 3, "to": 4, "color": "rgba(255,0,0, .5)" }  
           ]' data-major-ticks="1,2,3,4," data-bar-start-position="left">
     </canvas>
-    <div style="height: 20px;"></div> <!-- 20px space between the canvases -->
-    <canvas data-type="radial-gauge" data-value="40" data-width="700" data-height="700" data-bar-width="10"
+    <div style="height: 50px;"></div> <!-- 20px space between the canvases -->
+    <canvas data-type="radial-gauge" data-value="40" data-width="650" data-height="650" data-bar-width="10"
       data-bar-shadow="5" data-color-bar-progress="rgba(50,200,50,.75)" data-min-value="0" data-max-value="70"
       data-units="bar" data-title="High Pressure" data-minor-ticks="5" data-major-ticks="0,10,20,30,40,50,60,70"
       data-bar-start-position="left" data-highlights='[
@@ -155,7 +179,7 @@
         console.error("Error sending request: ", e);
       }
     }
-    setInterval(updateGauges, 2000); // Update the gauges every 2 seconds
+    setInterval(updateGauges, 1000); // Update the gauges every 2 seconds
   </script>
 
 </body>

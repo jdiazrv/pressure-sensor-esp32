@@ -22,15 +22,23 @@
 # Arduino IoT Pressure Monitor for MAB WaterMaker
 
 ## Project Overview
-This repository contains the source code for an Arduino-based IoT project designed for monitoring and reporting pressure readings in a MAB WaterMaker system. It uses an ESP8266 module for WiFi connectivity and an Adafruit ADS1115 ADC for precise pressure measurements. The data is displayed on an OLED screen and transmitted over the network using UDP.
+
+This repository contains the source code for an Arduino-based IoT project designed for monitoring and reporting pressure readings in a MAB WaterMaker system. It features an ESP8266 module for versatile WiFi connectivity, allowing the device to operate in both Station and Access Point (AP) modes. The project is tailored for seamless integration with boat instrumentation systems, including automatic detection of SignalK servers when connected to a network in Station Mode. Data is displayed on an OLED screen and transmitted over the network using UDP, ensuring real-time monitoring and accessibility in various operational environments.
+
+For more information about the MAB WaterMaker system, please visit [watermaker.se](https://watermaker.se).
 
 ## Features
 - Pressure measurement with Adafruit ADS1115 ADC.
 - Real-time display of pressure on an OLED screen.
-- WiFi connectivity with auto-reconnect functionality.
+- Flexible WiFi connectivity:
+  - **Station Mode**: Connects to an existing WiFi network and automatically searches for a SignalK server.
+  - **AP Mode**: Creates its own network for situations where no WiFi is available. Configurable AP password for secure access.
+  - **Auto-fallback to AP Mode**: If the device cannot connect to a pre-configured network, it temporarily creates a network `watermaker_config` for direct access and configuration.
 - Web server for configuration and real-time data display.
 - EEPROM storage for configuration settings.
 - UDP communication for data transmission.
+- Automatic SignalK server detection in Station Mode, enhancing its integration with marine systems.
+
 
 ## Hardware Requirements
 - ESP8266 WiFi module.
@@ -85,10 +93,26 @@ This repository contains the source code for an Arduino-based IoT project design
    - To upload these files, click on the "Upload Filesystem Image" option in PlatformIO. **Before doing this, make sure to close any PlatformIO terminals to avoid port-related errors.**
 
 
-## WiFi Connectivity and Network Behavior
-- If the device cannot connect to a pre-configured WiFi network, it automatically creates an Access Point (AP) with the SSID `Windlass_AP`. Users can connect to this AP to select the working WiFi network.
-- The code is designed to automatically search for a SIGNALK server, simplifying the process of integrating with boat instrumentation systems.
-- Currently, the program requires a WiFi connection to function. In the future, there are plans to allow operation in either AP mode or connected to a WiFi network, providing greater flexibility in various environments.
+### WiFi Connectivity and Network Behavior
+- The device offers two WiFi modes: Station Mode and Access Point (AP) Mode.
+- **Station Mode**: 
+  - In this mode, the device connects to an existing WiFi network.
+  - If the device cannot connect to the pre-configured network (e.g., network unavailable or incorrect credentials), it automatically creates a temporary Access Point named `watermaker_config`. This allows the user to connect directly to the device and select or reconfigure the WiFi network.
+  - Access the device at `watermaker.local` or through the IP address assigned by the router.
+  - In Station Mode, the software automatically searches for a SignalK server, simplifying integration with boat instrumentation systems.
+- **AP Mode**: 
+  - The device creates its own WiFi network named `watermaker`. This mode is useful when no existing WiFi network is available.
+  - Users can configure the AP's password for secure access.
+  - Access the device at `watermaker.local` or via the default IP `192.168.4.1`.
+- **Mode Selection and Configuration**: 
+  - The operational mode can be selected and configured through the web interface.
+- **Reset Feature**: 
+  - If AP mode is selected but the password is forgotten, you can reset the device using the ESP8266's physical reset button. This will reset the AP password to '12345678'.
+
+Overall, the device is designed to be versatile, capable of operating connected to an existing WiFi network or independently in AP mode. Its adaptive network behavior ensures continuous accessibility and functionality in various operational scenarios.
+
+
+
 
 ## Web Interface for Pressure Monitoring
 This project includes a web interface for real-time monitoring of pressure readings, tailored for MAB WaterMaker systems. The interface features two radial gauges, each displaying a different aspect of the watermaker's operation:

@@ -25,16 +25,19 @@
 #define MAX_VOLTAGE2 4.5
 #define MIN_PRESSURE2 0
 #define MAX_PRESSURE2 15
-
+#define MAX_AP_PASSWORD_LENGTH 20 // Longitud máxima para la contraseña del AP
+#define AP_PASSWORD "12345678"    // Contraseña del AP
+#define WIFI_MODE 1               // 0 para AP, 1 para red WiFi
 // EEPROM Addresses for storing configuration settings
-const int ADDRESSES[] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36};
+const int ADDRESSES[] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44};
 
 // OLED display setup
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET 0 // Reset pin not used in this configuration
 #define WIFI_AP_STA 1
-#define LED_PIN D5                // LED pin for Wi-Fi connection indication
+#define LED_PIN D5
+#define DEBUG 1                   // LED pin for Wi-Fi connection indication
 unsigned long previousMillis = 0; // Stores the last time a UDP message was sent
 const long interval = 3000;       // Interval in milliseconds for sending UDP messages
 
@@ -52,12 +55,14 @@ float maxPressure2 = 15;
 float pressure2;
 long unsigned int intervalForAP = 10000; // interval if wifi connection is not achieve to start AP
 bool tryingToConnect = false;
-unsigned long startTime;           // Tracks the start time of Wi-Fi connection attempts
-bool isFirstBoot = true;           // Flag to check if it's the first boot
-String ssid_sta = "enjoy";         // WLAN name for station connection
-String password_sta = "EmmO174.."; // WLAN password for station connection
-IPAddress ip1;                     // IP address for SignalK server
-unsigned int outPort = 4210;       // UDP port for SignalK server communication
+unsigned long startTime;                              // Tracks the start time of Wi-Fi connection attempts
+bool isFirstBoot = true;                              // Flag to check if it's the first boot
+String ssid_sta = "enjoy";                            // WLAN name for station connection
+String password_sta = "EmmO174..";                    // WLAN password for station connection
+IPAddress ip1;                                        // IP address for SignalK server
+unsigned int outPort = 4210;                          // UDP port for SignalK server communication
+int WifiModeApSTa = 1;                                // 0 para AP, 1 para red WiFi
+char apPassword[MAX_AP_PASSWORD_LENGTH] = "12345678"; // Contraseña del AP
 
 // Initialize ADS1115 for reading analog values
 Adafruit_ADS1115 ads;
@@ -141,7 +146,7 @@ void Event_Index()
 // Function to write configuration settings to EEPROM
 void writeEEPROM()
 {
-  if (maxVoltage1 > 1 && maxVoltage1 < 5 && maxPressure1 > 0.1 && maxPressure1 < 150)
+  if (maxVoltage2 < 5 && maxVoltage1 < 5 && maxPressure1 > 0.1 && maxPressure1 < 150)
   {
     // Write values to EEPROM only if they are within valid ranges
     EEPROM.put(ADDRESSES[0], minVoltage1);
@@ -152,6 +157,8 @@ void writeEEPROM()
     EEPROM.put(ADDRESSES[5], maxVoltage2);
     EEPROM.put(ADDRESSES[6], minPressure2);
     EEPROM.put(ADDRESSES[7], maxPressure2);
+    EEPROM.put(ADDRESSES[8], WifiModeApSTa);
+    EEPROM.put(ADDRESSES[9], apPassword);
     EEPROM.commit();
   }
 }
@@ -168,10 +175,13 @@ void readEEPROM()
   EEPROM.get(ADDRESSES[5], maxVoltage2);
   EEPROM.get(ADDRESSES[6], minPressure2);
   EEPROM.get(ADDRESSES[7], maxPressure2);
+  EEPROM.get(ADDRESSES[8], WifiModeApSTa);
+  EEPROM.get(ADDRESSES[9], apPassword);
 
   // Check if the read values are valid, if not, set them to default values
-  if (isnan(maxVoltage1) || isnan(maxPressure1) || maxVoltage1 <= 0 || maxVoltage1 > 5 || maxPressure1 > 150 || maxPressure1 <= 0)
+  if (isnan(maxVoltage1) || isnan(maxPressure1) || maxVoltage1 <= 0 || maxVoltage1 > 5 || maxPressure1 > 150 || maxPressure1 <= 0 || WifiModeApSTa < 0 || WifiModeApSTa > 1 || isnan(WifiModeApSTa))
   {
+    Serial.print("Invalid values. Using default settings");
     minVoltage1 = MIN_VOLTAGE1;
     maxVoltage1 = MAX_VOLTAGE1;
     minPressure1 = MIN_PRESSURE1;
@@ -180,6 +190,8 @@ void readEEPROM()
     maxVoltage2 = MAX_VOLTAGE2;
     minPressure2 = MIN_PRESSURE2;
     maxPressure2 = MAX_PRESSURE2;
+    WifiModeApSTa = WIFI_MODE;
+    strcpy(apPassword, AP_PASSWORD); // Copia el literal en apPassword
     writeEEPROM();
   }
 }
@@ -189,8 +201,13 @@ void Event_pressure()
 {
   // Send pressure values as a JSON response
   String jsonResponse = "{\"pressure1\": " + String(pressure1) + ", \"pressure2\": " + String(pressure2) + "}";
+  digitalWrite(LED_PIN, HIGH);
+  delay(100);
+  digitalWrite(LED_PIN, LOW); // Blink the LED
   server.send(200, "application/json", jsonResponse);
+#if DEBUG == 1
   Serial.println(jsonResponse);
+#endif
 }
 
 // Event handler for serving JavaScript files
@@ -230,8 +247,7 @@ void Event_Submit()
 {
   // Handle configuration submission and save new settings
 
-  server.send(200, "text/html", "Configuration saved");
-  Serial.println("Configuration saved");
+  Serial.println("New Configuration");
   // Print submitted values to the serial monitor (for debugging)
   Serial.println(server.arg("maxPressure1"));
   Serial.println(server.arg("minPressure1"));
@@ -250,11 +266,34 @@ void Event_Submit()
   minPressure2 = server.arg("minPressure2").toFloat();
   minVoltage2 = server.arg("minVdc2").toFloat();
   maxVoltage2 = server.arg("maxVdc2").toFloat();
+  int newWifiModeApSTa = server.arg("wifiMode").toInt();
+  String newApPassword = server.arg("apPassword"); // Asume que 'apPassword' es el nombre del campo
+                                                   // Verificar si WifiModeApSTa ha cambiado
+  bool shouldRestart = false;
+  if (newWifiModeApSTa != WifiModeApSTa)
+  {
+    WifiModeApSTa = newWifiModeApSTa;
+    shouldRestart = true;
+  }
+  if (newApPassword != apPassword)
+  {
+    strncpy(apPassword, newApPassword.c_str(), MAX_AP_PASSWORD_LENGTH);
+    shouldRestart = true;
+  }
+
   writeEEPROM();
+
+  if (shouldRestart)
+  {
+    server.send(200, "text/html", "Configuration saved. Device will restart now.");
+    delay(2000);
+    ESP.restart(); // Reiniciar el dispositivo para aplicar cambios
+  }
   drawScreen();
-  delay(1000);
-  server.sendHeader("Location", String("/"), true);
-  server.send(302, "text/plain", "");
+
+  // Enviar una página que muestra el mensaje y luego redirige
+  String responseHTML = "<html><head><meta http-equiv='refresh' content='1;url=/'></head><body>Configuration saved. Redirecting...</body></html>";
+  server.send(200, "text/html", responseHTML);
 }
 
 void Event_Config()
@@ -269,6 +308,9 @@ void Event_Config()
   htmlContent.replace("{minVdc2}", String(minVoltage2));
   htmlContent.replace("{maxVdc2}", String(maxVoltage2));
   htmlContent.replace(',', '.');
+  htmlContent.replace("{wifiModeAP}", (WifiModeApSTa == 0) ? "selected" : "");
+  htmlContent.replace("{wifiModeSTA}", (WifiModeApSTa == 1) ? "selected" : "");
+  htmlContent.replace("{apPassword}", String(apPassword));
   server.send(200, "text/html", htmlContent);
 }
 const int MaxDiscoveryAttempts = 5;
@@ -371,27 +413,65 @@ void setup()
 {
   Serial.begin(115200);
   EEPROM.begin(512);
-  ads.begin();
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.setTextColor(WHITE);
-  Serial.println("Start");
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
-  drawScreen();
-  readEEPROM();
-  Serial.print("Reading EEPROM for the first time...");
-  Serial.println(maxPressure1);
-  WiFi.hostname(hostName); // Set device hostname
-  tryingToConnect = true;
-  String chkPassword = WiFi.psk();
-  if (chkPassword.length() == 0)
+  readEEPROM();                                      // Read configurations from EEPROM, including WifiModeApSTa
+  const rst_info *resetInfo = system_get_rst_info(); // Get information about the last reset
+  if (resetInfo->reason == REASON_EXT_SYS_RST)
   {
-    wifiManager.autoConnect("watermaker_AP", "12345678"); // password protected ap
+    // Hardware reset detected through the reset button
+    Serial.println("Hardware reset detected. Resetting AP password to default.");
+    strcpy(apPassword, AP_PASSWORD); // Reset the AP password to default
+    // Save the reset password to EEPROM
+    writeEEPROM();
   }
   else
   {
-    WiFi.begin();
+    // Reset due to other reasons, load normal configurations
+    readEEPROM();
   }
+  // Component initialization
+  ads.begin();
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextColor(WHITE);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  drawScreen();
+
+  Serial.println("Start");
+
+  // Network setup
+  WiFi.hostname(hostName); // Set the device hostname
+
+  if (WifiModeApSTa == 0)
+  {
+    // AP mode setup
+    Serial.println("Setting AP mode. SSID is " + String(hostName) + ", password is " + String(apPassword));
+    WiFi.softAP(hostName, apPassword);
+    if (!MDNS.begin(hostName))
+    { // Start the mDNS responder for hostName.local
+      Serial.println("Error setting up MDNS responder!");
+    }
+    else
+    {
+      Serial.println("mDNS responder started");
+    }
+    Serial.print("AP IP address: ");
+    Serial.println(WiFi.softAPIP());
+  }
+  else
+  {
+    // Attempt to connect to an existing WiFi network
+    String chkPassword = WiFi.psk();
+    if (chkPassword.length() == 0)
+    {
+      wifiManager.autoConnect("watermaker_config", "12345678"); // Password-protected AP
+    }
+    else
+    {
+      WiFi.begin(ssid_sta.c_str(), password_sta.c_str());
+    }
+  }
+
+  // Mount LittleFS
   if (!LittleFS.begin())
   {
     Serial.println("Error mounting LittleFS");
@@ -401,8 +481,10 @@ void setup()
   {
     Serial.println("LittleFS mounted successfully");
   }
+
+  // Web server setup
   server.on("/", Event_Index);
-  server.on("/gauge.min.js", Event_js); // when index_html calls for gauge.min.js we need to serve it.
+  server.on("/gauge.min.js", Event_js);
   server.on("/config", HTTP_GET, Event_Config);
   server.on("/submit", HTTP_POST, Event_Submit);
   server.on("/pressure", HTTP_GET, []()
@@ -410,6 +492,7 @@ void setup()
     server.sendHeader("Access-Control-Allow-Origin", "*");
     Event_pressure(); });
   server.begin();
+
   Serial.println("HTTP Server started");
 }
 
@@ -417,10 +500,56 @@ float adcToVoltage(int16_t adcValue)
 {
   return static_cast<float>(adcValue) * 0.1875 / 1000.0;
 }
+
 float mapToPressure(float voltage, float minVoltage, float maxVoltage, float minPressure, float maxPressure)
 {
-  float pressure = ((voltage - minVoltage) / (maxVoltage - minVoltage)) * (maxPressure - minPressure);
-  return (pressure < 0) ? 0 : pressure;
+  float pressure = ((voltage - minVoltage) / (maxVoltage - minVoltage)) * (maxPressure - minPressure); // Calculate the pressure based on the voltage
+  return (pressure < 0) ? 0 : pressure;                                                                // Return the pressure, but never less than 0
+}
+
+void handleNetwork()
+{
+
+  // WiFi Mode
+  if (WiFi.status() != WL_CONNECTED)
+  {                              // If the device is not connected to WiFi
+    digitalWrite(LED_PIN, HIGH); // Turn on the LED to indicate that it's not connected
+    if (!tryingToConnect)
+    {                                                               // If the device is not currently trying to connect
+      Serial.println("WiFi not connected, trying to reconnect..."); // Print a message
+      WiFi.begin(ssid_sta.c_str(), password_sta.c_str());           // Try to connect to the WiFi network
+      startTime = millis();                                         // Record the start time
+      tryingToConnect = true;                                       // Set the flag
+    }
+    else if (millis() - startTime > intervalForAP)
+    {                                                       // If the device has been trying to connect for too long
+      Serial.println("Retrying WiFi connection...");        // Print a message
+      wifiManager.autoConnect("watermaker_AP", "12345678"); // Try to automatically connect
+      tryingToConnect = true;                               // Set the flag
+    }
+  }
+  else if (tryingToConnect)
+  {                                                     // If the device is connected and was previously trying to connect
+    Serial.println("Successfully reconnected to WiFi"); // Print a message
+    handleConnected();                                  // Handle the connection
+    digitalWrite(LED_PIN, LOW);                         // Turn off the LED
+    tryingToConnect = false;                            // Reset the flag
+    ArduinoOTA.setHostname(hostName);                   // Set the hostname for the OTA service
+    InitOTA();                                          // Initialize the OTA service
+  }
+  else
+  {                                         // If the device is connected and was not previously trying to connect
+    unsigned long currentMillis = millis(); // Get the current time
+    if (currentMillis - previousMillis >= interval)
+    {                                                                                      // If it's time to send an update
+      previousMillis = currentMillis;                                                      // Record the time of this update
+      sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.high", pressure1); // Send an update for the high pressure
+      sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.low", pressure2);  // Send an update for the low pressure
+      digitalWrite(LED_PIN, HIGH);
+      delay(100);
+      digitalWrite(LED_PIN, LOW); // Blink the LED
+    }
+  }
 }
 
 void loop()
@@ -438,45 +567,8 @@ void loop()
 
   drawScreen();
   server.handleClient(); // Handle HTTP requests
-  if (WiFi.status() != WL_CONNECTED)
+  if (WifiModeApSTa == 1)
   {
-    digitalWrite(LED_PIN, HIGH);
-    if (!tryingToConnect)
-    {
-      Serial.println("WiFi not connected, trying to reconnect");
-      WiFi.begin(ssid_sta, password_sta);
-      startTime = millis();
-      tryingToConnect = true;
-    }
-    else if (millis() - startTime > intervalForAP) // si no hay red en intervalForAP pasa al modo AP
-    {
-      Serial.println("Attempting WiFi autoconnect");
-      wifiManager.autoConnect("watermaker_AP", "12345678"); // password-protected AP
-      tryingToConnect = true;                               // Set true again for the next check
-    }
-  }
-  else if (tryingToConnect) // we were trying to connect and now we are connected
-  {
-    Serial.println("Successfully reconnected to WiFi");
-    handleConnected();
-    digitalWrite(LED_PIN, LOW);
-    tryingToConnect = false;
-    ArduinoOTA.setHostname(hostName);
-    InitOTA();
-  }
-  else // we are connected to WiFi
-  {
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousMillis >= interval)
-    {
-      previousMillis = currentMillis; // Save the current time
-      sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.high", pressure1);
-      sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.low", pressure2);
-
-      // Blink the LED
-      digitalWrite(LED_PIN, HIGH); // Turn on the LED
-      delay(100);                  // Wait 100 ms
-      digitalWrite(LED_PIN, LOW);  // Turn off the LED
-    }
+    handleNetwork();
   }
 }
