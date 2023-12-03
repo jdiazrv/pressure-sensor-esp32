@@ -132,7 +132,7 @@ This project includes a web interface for real-time monitoring of pressure readi
   - **Orange Zone (57-60 bar)**: Transition or caution area.
   - **Red Zone (60-70 bar)**: High-pressure warning.
 
-- ![PCB Layout][def3]
+- ![Gauges] (jdiazrv/8266-pressure-sensor/res/gauges.jpeg)
 
 These gauges are designed to provide clear and intuitive feedback on the system's status, with green zones specifically marking the ideal operating pressures. Users can conveniently monitor the watermaker's performance and ensure it operates within safe and efficient pressure ranges. 
 Data is received in the SignalkServer, consequently it can be display with KIP or with third party sapps sucha as WillHelm SK.
@@ -170,8 +170,8 @@ Aisler offers quality PCB manufacturing services, ensuring that the PCBs are pro
 For assembly and verification, high-resolution images of the circuit design are made available:
 
 
-- ![Circuit Overview][def]
-- ![PCB Layout][def2]
+- ![Circuit Overview](jdiazrv/8266-pressure-sensor/res/Schematics.png)
+- ![PCB Layout] (jdiazrv/8266-pressure-sensor/res/pressure_pcb.png)
 
 Please replace `url-to-circuit-overview` and `url-to-pcb-layout` with the actual links to the images where they are hosted.
 
@@ -183,10 +183,4 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 ## Contact
 - Juan Diaz   
-
-
-[def]: (jdiazrv/8266-pressure-sensor/res/Schematics.png)
-[def2]: (jdiazrv/8266-pressure-sensor/res/pressure_pcb.png)
-[def3]: (jdiazrv/8266-pressure-sensor/res/gauges.jpeg)
-
 
