@@ -185,6 +185,8 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 - Juan Diaz   
 
 
-[def]: jdiazrv/8266-pressure-sensor/res/Schematics.png
-[def2]: jdiazrv/8266-pressure-sensor/res/pressure_pcb.png
-[def3]: jdiazrv/8266-pressure-sensor/res/gauges.jpeg
+[def]: raw.githubusercontent.com/jdiazrv/8266-pressure-sensor/res/Schematics.png
+[def2]: raw.githubusercontent.com/jdiazrv/8266-pressure-sensor/res/pressure_pcb.png
+[def3]: raw.githubusercontent.com/jdiazrv/8266-pressure-sensor/res/gauges.jpeg
+
+
