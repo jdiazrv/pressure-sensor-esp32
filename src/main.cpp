@@ -37,6 +37,7 @@ const int ADDRESSES[] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44};
 #define OLED_RESET 0 // Reset pin not used in this configuration
 #define WIFI_AP_STA 1
 #define LED_PIN D5
+#define LED_PIN2 D6
 #define DEBUG 1                   // LED pin for Wi-Fi connection indication
 unsigned long previousMillis = 0; // Stores the last time a UDP message was sent
 const long interval = 3000;       // Interval in milliseconds for sending UDP messages
@@ -55,6 +56,7 @@ float maxPressure2 = 15;
 float pressure2;
 long unsigned int intervalForAP = 10000; // interval if wifi connection is not achieve to start AP
 bool tryingToConnect = false;
+bool Ads1115Found = false;
 unsigned long startTime;                              // Tracks the start time of Wi-Fi connection attempts
 bool isFirstBoot = true;                              // Flag to check if it's the first boot
 String ssid_sta = "enjoy";                            // WLAN name for station connection
@@ -201,9 +203,9 @@ void Event_pressure()
 {
   // Send pressure values as a JSON response
   String jsonResponse = "{\"pressure1\": " + String(pressure1) + ", \"pressure2\": " + String(pressure2) + "}";
-  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(LED_PIN, LOW);
   delay(100);
-  digitalWrite(LED_PIN, LOW); // Blink the LED
+  digitalWrite(LED_PIN, HIGH); // Blink the LED
   server.send(200, "application/json", jsonResponse);
 #if DEBUG == 1
   Serial.println(jsonResponse);
@@ -411,6 +413,8 @@ void handleConnected()
 
 void setup()
 {
+   pinMode(LED_PIN2, OUTPUT);
+  digitalWrite(LED_PIN2, HIGH);
   Serial.begin(115200);
   EEPROM.begin(512);
   readEEPROM();                                      // Read configurations from EEPROM, including WifiModeApSTa
@@ -429,11 +433,24 @@ void setup()
     readEEPROM();
   }
   // Component initialization
-  ads.begin();
+  // Intentar inicializar el objeto ADS1115
+ 
+    if (!ads.begin()) {
+    Serial.println("ADS1115 no encontrado. Verifique la conexión. Reiniciando...");
+    delay(5000); // Espera 5 segundos antes de reiniciar
+    ESP.restart(); // Reinicia el ESP8266
+  } else {
+    Serial.println("ADS1115 encontrado.");
+    Ads1115Found = true;
+  }
+
+  Serial.println("Inicializando OLED...");
+
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  
   display.setTextColor(WHITE);
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+  digitalWrite(LED_PIN, HIGH);
   drawScreen();
 
   Serial.println("Start");
@@ -513,7 +530,7 @@ void handleNetwork()
   // WiFi Mode
   if (WiFi.status() != WL_CONNECTED)
   {                              // If the device is not connected to WiFi
-    digitalWrite(LED_PIN, HIGH); // Turn on the LED to indicate that it's not connected
+    digitalWrite(LED_PIN, LOW); // Turn oFF the LED to indicate that it's not connected
     if (!tryingToConnect)
     {                                                               // If the device is not currently trying to connect
       Serial.println("WiFi not connected, trying to reconnect..."); // Print a message
@@ -532,7 +549,7 @@ void handleNetwork()
   {                                                     // If the device is connected and was previously trying to connect
     Serial.println("Successfully reconnected to WiFi"); // Print a message
     handleConnected();                                  // Handle the connection
-    digitalWrite(LED_PIN, LOW);                         // Turn off the LED
+    digitalWrite(LED_PIN, HIGH);                         // Turn on the LED
     tryingToConnect = false;                            // Reset the flag
     ArduinoOTA.setHostname(hostName);                   // Set the hostname for the OTA service
     InitOTA();                                          // Initialize the OTA service
@@ -545,17 +562,20 @@ void handleNetwork()
       previousMillis = currentMillis;                                                      // Record the time of this update
       sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.high", pressure1); // Send an update for the high pressure
       sendPressureUpdate(ip1, outPort, "environment.watermaker.pressure.low", pressure2);  // Send an update for the low pressure
-      digitalWrite(LED_PIN, HIGH);
+      digitalWrite(LED_PIN, LOW);
       delay(100);
-      digitalWrite(LED_PIN, LOW); // Blink the LED
+      digitalWrite(LED_PIN, HIGH); // Blink the LED
     }
   }
 }
 
 void loop()
 {
+
   ArduinoOTA.handle();                       // por si actualizamos el codigo Over The Air
-  MDNS.update();                             // Check to see if browser is looking for IP address
+  MDNS.update();  
+  if (Ads1115Found)    { 
+                  // Check to see if browser is looking for IP address
   int16_t adc0 = ads.readADC_SingleEnded(0); // Reading from channel 0
   int16_t adc1 = ads.readADC_SingleEnded(1); // Reading from channel 1
 
@@ -565,8 +585,11 @@ void loop()
   pressure1 = mapToPressure(voltage1, minVoltage1, maxVoltage1, minPressure1, maxPressure1);
   pressure2 = mapToPressure(voltage2, minVoltage2, maxVoltage2, minPressure2, maxPressure2);
 
+  }
+
   drawScreen();
-  server.handleClient(); // Handle HTTP requests
+ 
+    server.handleClient(); // Handle HTTP requests
   if (WifiModeApSTa == 1)
   {
     handleNetwork();
