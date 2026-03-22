@@ -2,6 +2,14 @@
 // Based on Chain Counter ESP32 mejorado v3.7
 // Dual pressure sensor with SignalK integration
 // Changelog:
+//   v1.1
+//     Fix: Sensor 2 factory max pressure corrected to 80 bar
+//     Fix: SignalK UDP mapping corrected to low/high semantic paths
+//     Add: SignalK HTTP health probe via /signalk every 15 s
+//     Add: automatic rediscovery when a previously reachable SignalK server disappears
+//     Fix: dashboard SignalK pill now reflects real server availability
+//     Fix: dashboard uses backend data validity instead of guessing from pressure values
+//     Fix: UDP monitor distinguishes local send success from local send failure
 //   v1.0
 //     Add: SignalK discovery with robust .local hostname resolution
 //     Fix: do not overwrite configured UDP port with SignalK websocket service port
@@ -15,6 +23,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <HTTPClient.h>
 #include <Preferences.h>
 #include <WiFiUdp.h>
 #include <ESPmDNS.h>
@@ -29,7 +38,7 @@
 #include "config_html.h"
 
 // ── Versión del software ───────────────────────────────────────────────────────
-#define SW_VERSION "v1.0"
+#define SW_VERSION "v1.1"
 
 // ── Nivel de debug ──────────────────────────────────────────────────────────────
 // 0 = sin logs
@@ -97,6 +106,8 @@
 #define DEFAULT_SIGNALK_MAX_ATTEMPTS 12
 #define DEFAULT_UDP_PORT 4210
 #define SIGNALK_RETRY_MS 5000
+#define SIGNALK_PROBE_MS 15000
+#define SIGNALK_HTTP_TIMEOUT_MS 3000
 #define SENSOR_DISCONNECT_TOLERANCE_V 0.2f
 #define SENSOR_NO_SIGNAL_V 0.05f
 #define MONITOR_BUFFER_SIZE 160
@@ -136,10 +147,15 @@ String ssid_sta = "";
 String password_sta = "";
 IPAddress ip1 = IPAddress(0, 0, 0, 0);
 unsigned int outPort = DEFAULT_UDP_PORT;
+unsigned int signalkServicePort = 3000;
 int signalkMaxAttempts = DEFAULT_SIGNALK_MAX_ATTEMPTS;
 int signalkDiscoveryAttempts = 0;
 bool signalkDiscoveryPending = false;
 unsigned long lastDiscoveryAttempt = 0;
+bool signalkServerReachable = false;
+bool signalkHadSuccessfulProbe = false;
+bool signalkDiscoveryContinuous = false;
+unsigned long lastSignalkProbeMs = 0;
 int sensorMode = SENSOR_MODE_REAL;
 
 // Device configuration
@@ -188,6 +204,7 @@ float mapToPressure(float voltage, float minVoltage, float maxVoltage, float min
 void addMonitorEvent(const char *tag, const String &message);
 String jsonEscape(const String &input);
 String formatMillisBrief(unsigned long ms);
+void probeSignalKServer(bool force = false);
 
 bool isValidIP(const IPAddress &ip)
 {
@@ -267,8 +284,76 @@ bool shouldSendUdpData()
 {
     if (WiFi.status() != WL_CONNECTED || wifiModeApSta != 1) return false;
     if (!isValidIP(ip1)) return false;
+    if (!signalkServerReachable) return false;
     if (sensorMode == SENSOR_MODE_DEMO_UDP) return true;
     return sensorMode == SENSOR_MODE_REAL && Ads1115Found;
+}
+
+void probeSignalKServer(bool force)
+{
+    if (wifiModeApSta != 1 || WiFi.status() != WL_CONNECTED)
+    {
+        signalkServerReachable = false;
+        return;
+    }
+
+    if (!isValidIP(ip1))
+    {
+        signalkServerReachable = false;
+        return;
+    }
+
+    unsigned long now = millis();
+    if (!force && lastSignalkProbeMs != 0 && now - lastSignalkProbeMs < SIGNALK_PROBE_MS)
+        return;
+
+    lastSignalkProbeMs = now;
+
+    HTTPClient http;
+    WiFiClient client;
+    String url = "http://" + ip1.toString() + ":" + String(signalkServicePort) + "/signalk";
+    http.setTimeout(SIGNALK_HTTP_TIMEOUT_MS);
+
+    bool previousState = signalkServerReachable;
+    int httpCode = -1;
+
+    if (http.begin(client, url))
+    {
+        httpCode = http.GET();
+        signalkServerReachable = (httpCode == HTTP_CODE_OK);
+        if (signalkServerReachable)
+            signalkHadSuccessfulProbe = true;
+        http.end();
+    }
+    else
+    {
+        signalkServerReachable = false;
+    }
+
+    if (signalkServerReachable != previousState)
+    {
+        if (signalkServerReachable)
+        {
+            LOG_INFF("SignalK HTTP OK: %s", url.c_str());
+            addMonitorEvent("SK", "HTTP probe OK " + url);
+        }
+        else
+        {
+            LOG_ERRF("SignalK HTTP probe failed: %s code=%d", url.c_str(), httpCode);
+            addMonitorEvent("ERR", "SignalK probe failed " + url + " code=" + String(httpCode));
+        }
+    }
+
+    if (!signalkServerReachable && !signalkDiscoveryPending)
+    {
+        if (previousState || signalkHadSuccessfulProbe)
+            signalkDiscoveryContinuous = true;
+        signalkDiscoveryPending = true;
+        signalkDiscoveryAttempts = 0;
+        lastDiscoveryAttempt = 0;
+        LOG_INF("SignalK unreachable - restarting discovery");
+        addMonitorEvent("SK", "Probe failed, rediscovery started");
+    }
 }
 
 void updateDeviceError()
@@ -520,7 +605,7 @@ void trySignalKDiscovery()
     if (wifiModeApSta != 1 || WiFi.status() != WL_CONNECTED) return;
     if (millis() - lastDiscoveryAttempt < SIGNALK_RETRY_MS) return;
 
-    if (signalkMaxAttempts > 0 && signalkDiscoveryAttempts >= signalkMaxAttempts)
+    if (!signalkDiscoveryContinuous && signalkMaxAttempts > 0 && signalkDiscoveryAttempts >= signalkMaxAttempts)
     {
         signalkDiscoveryPending = false;
         LOG_INFF("SignalK discovery: abandonado tras %d intentos", signalkDiscoveryAttempts);
@@ -570,8 +655,12 @@ void trySignalKDiscovery()
         }
 
         ip1 = resolved;
+        signalkServicePort = (signalkPort > 0) ? (unsigned int)signalkPort : 3000;
         signalkDiscoveryPending = false;
+        signalkDiscoveryContinuous = false;
         signalkDiscoveryAttempts = 0;
+        signalkServerReachable = false;
+        lastSignalkProbeMs = 0;
         prefs.begin("config", false);
         prefs.putUInt("signalkIp", (uint32_t)ip1);
         prefs.end();
@@ -580,6 +669,8 @@ void trySignalKDiscovery()
                  ip1.toString().c_str(), signalkPort, outPort);
         addMonitorEvent("SK", "Discovered " + ip1.toString() + " service=" + String(signalkPort) +
                               " udp=" + String(outPort));
+
+        probeSignalKServer(true);
 
         if (shouldSendUdpData())
         {
@@ -780,6 +871,7 @@ void Event_pressure()
     jsonResponse += "\"sensorMode\":\"" + String(sensorModeName(sensorMode)) + "\",";
     jsonResponse += "\"firmwareVersion\":\"" + String(SW_VERSION) + "\",";
     jsonResponse += "\"signalkIp\":\"" + (isValidIP(ip1) ? ip1.toString() : String("0.0.0.0")) + "\",";
+    jsonResponse += "\"signalkAlive\":" + String(signalkServerReachable ? "true" : "false") + ",";
     jsonResponse += "\"error\":\"" + lastDeviceError + "\"";
     jsonResponse += "}";
     ledBlinkStart = millis();
@@ -933,6 +1025,9 @@ void Event_Submit()
     signalkMaxAttempts = (newSignalkMax >= 0 && newSignalkMax <= 60) ? newSignalkMax : DEFAULT_SIGNALK_MAX_ATTEMPTS;
     outPort = (newOutPort >= 1024 && newOutPort <= 65535) ? newOutPort : DEFAULT_UDP_PORT;
     ip1 = newIp1;
+    signalkServicePort = 3000;
+    signalkServerReachable = false;
+    lastSignalkProbeMs = 0;
     updateDeviceError();
 
     // Save to NVS
@@ -942,6 +1037,7 @@ void Event_Submit()
     if (ip1 == IPAddress(0, 0, 0, 0) && wifiModeApSta == 1 && WiFi.isConnected())
     {
         signalkDiscoveryPending = true;
+        signalkDiscoveryContinuous = false;
         signalkDiscoveryAttempts = 0;
         lastDiscoveryAttempt = 0;
         LOG_INF("SignalK IP cleared - restarting discovery");
@@ -949,7 +1045,9 @@ void Event_Submit()
     else if (ip1 != IPAddress(0, 0, 0, 0))
     {
         signalkDiscoveryPending = false;
+        signalkDiscoveryContinuous = false;
         LOG_INFF("SignalK IP set manually: %s", ip1.toString().c_str());
+        probeSignalKServer(true);
     }
 
     bool shouldRestart = (oldWifiMode != wifiModeApSta);
@@ -1052,15 +1150,21 @@ void Event_SetSignalKIp()
     }
 
     ip1 = newIp;
+    signalkServicePort = 3000;
+    signalkServerReachable = false;
+    lastSignalkProbeMs = 0;
     if (isValidIP(ip1))
     {
         signalkDiscoveryPending = false;
+        signalkDiscoveryContinuous = false;
         LOG_INFF("SignalK IP set from UI: %s", ip1.toString().c_str());
         addMonitorEvent("SK", "IP set manually from UI: " + ip1.toString());
+        probeSignalKServer(true);
     }
     else if (wifiModeApSta == 1 && WiFi.status() == WL_CONNECTED)
     {
         signalkDiscoveryPending = true;
+        signalkDiscoveryContinuous = false;
         signalkDiscoveryAttempts = 0;
         lastDiscoveryAttempt = 0;
         LOG_INF("SignalK IP cleared from UI - restarting discovery");
@@ -1116,6 +1220,8 @@ void Event_DiagnosticsData()
     json += "\"mac\":\"" + WiFi.macAddress() + "\",";
     json += "\"rssi\":" + String((WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0) + ",";
     json += "\"signalkIp\":\"" + (isValidIP(ip1) ? ip1.toString() : String("0.0.0.0")) + "\",";
+    json += "\"signalkAlive\":" + String(signalkServerReachable ? "true" : "false") + ",";
+    json += "\"signalkServicePort\":" + String(signalkServicePort) + ",";
     json += "\"udpPort\":" + String(outPort) + ",";
     json += "\"adsFound\":" + String(Ads1115Found ? "true" : "false") + ",";
     json += "\"voltage1\":" + String(voltage1, 3) + ",";
@@ -1157,10 +1263,10 @@ void Event_DiagnosticsPage()
         "<div class='top'><h2>Device diagnostics</h2><button onclick=\"window.location='/tools'\">Back</button></div>"
         "<div id='grid' class='grid'></div>"
         "<script>"
-        "const fields=[['Firmware','firmwareVersion'],['Mode','sensorMode'],['Device error','deviceError'],['WiFi connected','wifiConnected'],['SSID','ssid'],['Hostname','hostname'],['Local IP','localIp'],['AP IP','apIp'],['MAC','mac'],['RSSI','rssi'],['SignalK IP','signalkIp'],['UDP port','udpPort'],['ADS1115','adsFound'],['Voltage 1','voltage1'],['Voltage 2','voltage2'],['Pressure 1','pressure1'],['Pressure 2','pressure2'],['Heap free','heapFree'],['Heap min','heapMin'],['CPU MHz','cpuMHz'],['Chip model','chipModel'],['Chip revision','chipRevision'],['Chip cores','chipCores'],['Flash size','flashSize'],['Sketch size','sketchSize'],['Free sketch','freeSketchSpace'],['Uptime','uptimeMs']];"
+        "const fields=[['Firmware','firmwareVersion'],['Mode','sensorMode'],['Device error','deviceError'],['WiFi connected','wifiConnected'],['SSID','ssid'],['Hostname','hostname'],['Local IP','localIp'],['AP IP','apIp'],['MAC','mac'],['RSSI','rssi'],['SignalK IP','signalkIp'],['SignalK alive','signalkAlive'],['SignalK HTTP port','signalkServicePort'],['UDP port','udpPort'],['ADS1115','adsFound'],['Voltage 1','voltage1'],['Voltage 2','voltage2'],['Pressure 1','pressure1'],['Pressure 2','pressure2'],['Heap free','heapFree'],['Heap min','heapMin'],['CPU MHz','cpuMHz'],['Chip model','chipModel'],['Chip revision','chipRevision'],['Chip cores','chipCores'],['Flash size','flashSize'],['Sketch size','sketchSize'],['Free sketch','freeSketchSpace'],['Uptime','uptimeMs']];"
         "function fmtDuration(ms){const sec=Math.floor((Number(ms)||0)/1000);if(sec<60)return sec+' s';const min=Math.floor(sec/60);if(min<60)return min+' min';const hr=Math.floor(min/60);if(hr<24)return hr+' h';const day=Math.floor(hr/24);return day+' d';}"
         "function fmtKb(v){return (Math.round((Number(v)||0)/1024))+' KB';}"
-        "function fmtValue(key,val){if(val===undefined||val===null||val==='')return '--';if(key==='uptimeMs')return fmtDuration(val);if(['heapFree','heapMin','flashSize','sketchSize','freeSketchSpace'].includes(key))return fmtKb(val);if(key==='rssi')return val+' dBm';if(key==='cpuMHz')return val+' MHz';if(key==='voltage1'||key==='voltage2')return Number(val).toFixed(3)+' V';if(key==='pressure1'||key==='pressure2')return Number(val).toFixed(1)+' bar';if(key==='wifiConnected'||key==='adsFound')return val?'Yes':'No';return val;}"
+        "function fmtValue(key,val){if(val===undefined||val===null||val==='')return '--';if(key==='uptimeMs')return fmtDuration(val);if(['heapFree','heapMin','flashSize','sketchSize','freeSketchSpace'].includes(key))return fmtKb(val);if(key==='rssi')return val+' dBm';if(key==='cpuMHz')return val+' MHz';if(key==='voltage1'||key==='voltage2')return Number(val).toFixed(3)+' V';if(key==='pressure1'||key==='pressure2')return Number(val).toFixed(1)+' bar';if(key==='wifiConnected'||key==='adsFound'||key==='signalkAlive')return val?'Yes':'No';return val;}"
         "function render(data){const grid=document.getElementById('grid');grid.innerHTML=fields.map(f=>'<div class=\"card\"><div class=\"label\">'+f[0]+'</div><div class=\"value\">'+fmtValue(f[1],data[f[1]])+'</div></div>').join('');}"
         "function poll(){fetch('/api/diagnostics',{cache:'no-store'}).then(r=>r.json()).then(render).catch(()=>{});}"
         "poll();setInterval(poll,2000);"
@@ -1240,14 +1346,21 @@ void handleConnected()
     if (ip1 == IPAddress(0, 0, 0, 0))
     {
         signalkDiscoveryPending = true;
+        signalkDiscoveryContinuous = false;
         lastDiscoveryAttempt = 0;
         signalkDiscoveryAttempts = 0;
+        signalkServerReachable = false;
+        lastSignalkProbeMs = 0;
         LOG_INF("SignalK IP unknown - starting discovery");
     }
     else
     {
         signalkDiscoveryPending = false;
+        signalkDiscoveryContinuous = false;
+        signalkServerReachable = false;
+        lastSignalkProbeMs = 0;
         LOG_INFF("SignalK IP reused: %s", ip1.toString().c_str());
+        probeSignalKServer(true);
     }
 
     LOG_INFF("UDP port %d", outPort);
@@ -1680,6 +1793,7 @@ void loop()
 
     // SignalK discovery
     trySignalKDiscovery();
+    probeSignalKServer();
 
     // Network handling (STA mode only)
     if (wifiModeApSta == 1)
