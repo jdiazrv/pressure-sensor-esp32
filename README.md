@@ -1,189 +1,195 @@
+# ESP32 Pressure Sensor for MAB WaterMaker
 
-# Arduino IoT Pressure Monitor for MAB WaterMaker
+ESP32-based dual pressure monitor for a MAB WaterMaker system.
+It reads two 0.5-4.5 V pressure transducers through an ADS1115, shows the values on a local dashboard and OLED, and publishes the data to SignalK over UDP.
 
-**Table of Contents**
-1. [Project Overview](#project-overview)
-2. [Features](#features)
-3. [Hardware Requirements](#hardware-requirements)
-4. [Software](#software)
-   - [Software Dependencies](#software-dependencies)
-   - [Installation](#installation)
-   - [WiFi Connectivity and Network Behavior](#wifi-connectivity-and-network-behavior)
-   - [Web Interface for Pressure Monitoring](#web-interface-for-pressure-monitoring)
-5. [Hardware Description](#hardware-description)
-   - [Hardware Configuration](#hardware-configuration)
-   - [PCB Design and Ordering](#pcb-design-and-ordering)
-   - [Circuit Imagery](#circuit-imagery)
-6. [Contributing](#contributing)
-7. [License](#license)
-8. [Contact](#contact)
-
-
-# Arduino IoT Pressure Monitor for MAB WaterMaker
-
-## Project Overview
-
-This repository contains the source code for an Arduino-based IoT project designed for monitoring and reporting pressure readings in a MAB WaterMaker system. It features an ESP8266 module for versatile WiFi connectivity, allowing the device to operate in both Station and Access Point (AP) modes. The project is tailored for seamless integration with boat instrumentation systems, including automatic detection of SignalK servers when connected to a network in Station Mode. Data is displayed on an OLED screen and transmitted over the network using UDP, ensuring real-time monitoring and accessibility in various operational environments.
-
-For more information about the MAB WaterMaker system, please visit [watermaker.se](https://watermaker.se).
+This project is the ESP32 evolution of the original `8266-pressure-sensor`, adapted for the same hardware concept and marine workflow with a more complete web UI, better diagnostics, demo modes, OTA updates, and more robust SignalK discovery.
 
 ## Features
-- Pressure measurement with Adafruit ADS1115 ADC.
-- Real-time display of pressure on an OLED screen.
-- Flexible WiFi connectivity:
-  - **Station Mode**: Connects to an existing WiFi network and automatically searches for a SignalK server.
-  - **AP Mode**: Creates its own network for situations where no WiFi is available. Configurable AP password for secure access.
-  - **Auto-fallback to AP Mode**: If the device cannot connect to a pre-configured network, it temporarily creates a network `watermaker_config` for direct access and configuration.
-- Web server for configuration and real-time data display.
-- EEPROM storage for configuration settings.
-- UDP communication for data transmission.
-- Automatic SignalK server detection in Station Mode, enhancing its integration with marine systems.
 
+- Dual pressure acquisition with ADS1115
+- OLED local display
+- Responsive dashboard served from LittleFS
+- SignalK UDP output with automatic discovery
+- Manual SignalK IP override from the UI
+- Configurable and persistent UDP port
+- Real, Demo, and Demo + UDP modes
+- Device diagnostics page
+- SignalK monitor page with live scrolling log
+- Firmware OTA update from the browser
+- Filesystem OTA update from the browser
+- AP mode or client mode with WiFiManager fallback
+- Detection of:
+  - ADS1115 missing
+  - no signal from sensor
+  - disconnected sensor
+  - stale sensor data
 
-## Hardware Requirements
-- ESP8266 WiFi module.
-- Adafruit ADS1115 ADC.
-- OLED display (128x64 pixels).
-- Pressure sensors.
-- General electronic components (resistors, capacitors, wires, breadboard, etc.).
+## Hardware
 
+- ESP32 dev board
+- ADS1115 ADC
+- 2 pressure sensors with 0.5-4.5 V output
+- Small I2C OLED
+- 5 V regulated supply
 
-#Software 
-## Software Dependencies
-- Arduino IDE.
-- ESP8266 Board Package.
-- Adafruit ADS1x15 Library.
-- Adafruit GFX Library.
-- Adafruit SSD1306 Library.
-- ESP8266WiFi Library.
-- WiFiManager Library.
-- ESP8266mDNS Library.
-- EEPROM Library.
-- LittleFS Library.
+The original hardware concept and documentation come from the earlier 8266 project and are still relevant here.
 
-## Installation
+## Pressure Channels
 
-## Installation Steps
+- Sensor 1: low pressure / inlet pressure
+- Sensor 2: high pressure / main pressure
 
-1. **Clone or Download the Repository**
-   - Clone this repository to your local machine or download the source code.
+Default calibration:
 
-2. **Open the Project in Visual Studio Code**
-   - Install [Visual Studio Code (VS Code)](https://code.visualstudio.com/) if you haven't already.
-   - Install the PlatformIO IDE extension for VS Code. This extension provides an integrated development environment for IoT development.
-   - Open VS Code and navigate to the cloned or downloaded project directory.
+- Sensor 1: `0.5-4.5 V` => `0-15 bar`
+- Sensor 2: `0.5-4.5 V` => `0-80 bar`
 
-3. **Install Required Libraries**
-   - The PlatformIO IDE in VS Code automatically handles library dependencies as specified in the `platformio.ini` file. Ensure that all required libraries (listed in Software Dependencies) are included in this file.
+Dashboard visual ranges:
 
-4. **Configure WiFi Credentials and Other Settings**
-   - Locate the configuration file or section within the `main.cpp` file.
-   - Update the WiFi credentials and other settings according to your requirements.
+- Low pressure gauge: `0-4 bar`
+- High pressure gauge: `0-70 bar`
 
-5. **Connect Your Device**
-   - Connect your ESP8266 or Arduino board to your computer using a USB cable.
-   - VS Code with PlatformIO IDE will automatically detect the connected board. If not, you can manually select the correct board and port from the PlatformIO toolbar.
+## WiFi Modes
 
-6. **Compile and Upload**
-   - Use the PlatformIO IDE toolbar within VS Code to compile and upload the sketch to your board.
-   - Monitor the output console in VS Code for any errors and to confirm a successful upload.
+`Client`
 
-7. **Upload Additional Files**
-   - After uploading the code, you must upload additional files such as `index.html` and `gauge.min.js` (JavaScript) to the ESP8266's Filesystem. This is necessary for your project.
-   - To upload these files, click on the "Upload Filesystem Image" option in PlatformIO. **Before doing this, make sure to close any PlatformIO terminals to avoid port-related errors.**
+- Connects to an existing WiFi network
+- Tries to discover a SignalK server with mDNS
+- Publishes UDP to the configured or discovered target
 
+`AP only`
 
-### WiFi Connectivity and Network Behavior
-- The device offers two WiFi modes: Station Mode and Access Point (AP) Mode.
-- **Station Mode**: 
-  - In this mode, the device connects to an existing WiFi network.
-  - If the device cannot connect to the pre-configured network (e.g., network unavailable or incorrect credentials), it automatically creates a temporary Access Point named `watermaker_config`. This allows the user to connect directly to the device and select or reconfigure the WiFi network.
-  - Access the device at `watermaker.local` or through the IP address assigned by the router.
-  - In Station Mode, the software automatically searches for a SignalK server, simplifying integration with boat instrumentation systems.
-- **AP Mode**: 
-  - The device creates its own WiFi network named `watermaker`. This mode is useful when no existing WiFi network is available.
-  - Users can configure the AP's password for secure access.
-  - Access the device at `watermaker.local` or via the default IP `192.168.4.1`.
-- **Mode Selection and Configuration**: 
-  - The operational mode can be selected and configured through the web interface.
-- **Reset Feature**: 
-  - If AP mode is selected but the password is forgotten, you can reset the device using the ESP8266's physical reset button. This will reset the AP password to '12345678'.
+- Creates a local access point for direct access
+- Useful for standalone setup and service work
 
-Overall, the device is designed to be versatile, capable of operating connected to an existing WiFi network or independently in AP mode. Its adaptive network behavior ensures continuous accessibility and functionality in various operational scenarios.
+## Sensor Source Modes
 
+`Real`
 
+- Reads ADS1115 hardware
+- Sends UDP only when ADS1115 is detected
 
+`Demo`
 
-## Web Interface for Pressure Monitoring
-This project includes a web interface for real-time monitoring of pressure readings, tailored for MAB WaterMaker systems. The interface features two radial gauges, each displaying a different aspect of the watermaker's operation:
+- Generates realistic simulated pressures
+- Does not send UDP
 
-### Low Pressure Gauge
-- **Range**: 0 to 4 bar
-- **Color-Coded Highlights**:
-  - **Orange Zone (0-1 bar)**: Low-pressure warning.
-  - **Green Zone (1-3 bar)**: Normal operating pressure range.
-  - **Red Zone (3-4 bar)**: High-pressure warning.
+`Demo + UDP`
 
-### High Pressure Gauge
-- **Range**: 0 to 70 bar
-- **Color-Coded Highlights**:
-  - **Orange Zone (0-50 bar)**: Preparatory pressure range.
-  - **Green Zone (50-57 bar)**: Normal operating pressure range.
-  - **Orange Zone (57-60 bar)**: Transition or caution area.
-  - **Red Zone (60-70 bar)**: High-pressure warning.
+- Generates simulated pressures
+- Sends them through the same UDP pipeline for testing
 
-- ![Gauges][def]
+## Web Interface
 
-These gauges are designed to provide clear and intuitive feedback on the system's status, with green zones specifically marking the ideal operating pressures. Users can conveniently monitor the watermaker's performance and ensure it operates within safe and efficient pressure ranges. 
-Data is received in the SignalkServer, consequently it can be display with KIP or with third party sapps sucha as WillHelm SK.
+Main dashboard:
 
+- Large low and high pressure cards
+- RSSI indicator
+- SignalK status pill
+- Clickable status details with firmware/UI version and current error
 
+Settings:
 
-# Hardware Description
+- Calibration for both sensors
+- WiFi mode
+- sensor source mode
+- AP password
+- SignalK retry count
+- SignalK IP
+- UDP port
 
-## Hardware Configuration
+Maintenance:
 
-The hardware for this pressure monitoring system is specifically designed with surface-mount device (SMD) components, selected for their precision and compact form factor. The following components are utilized in the circuit:
+- firmware update
+- filesystem update
+- tools
+- factory reset
 
-- **D1 Mini (ESP8266)**: The core microcontroller board that manages data processing and WiFi communication.
-- **ADS1115 (Adafruit #1085)**: A high-precision 16-bit analog-to-digital converter, critical for converting analog pressure sensor signals into digital data.
-- **DC-DC Converter (Adjustable to 5V)**: Supplies a regulated 5V power to the ESP8266 and ADS1115 to ensure stable operation.
-- **SMD Resistors**: 
-  - **R1, R2 (220Ω SMD Size 1206)**: Serve as pull-down resistors to establish a known state when the input is floating.
-  - **R3, R4, R5 (100kΩ SMD Size 1206)**: Also configured as pull-down resistors to provide a default low signal when no input is detected.
-- **SMD LEDs**: 
-  - **L1 (Red SMD Size 1206)**: Acts as a status indicator, potentially signaling power or error conditions.
-  - **L2 (Green SMD Size 1206)**: Indicates normal operation or successful processes.
+Tools:
 
-The SMD resistors are not mere suggestions; the PCB layout is specifically designed for their use, enabling a cleaner design and facilitating automated assembly processes.
+- device diagnostics
+- SignalK monitor
 
-## PCB Design and Ordering
+## OTA Updates
 
-The custom PCB is tailored to fit the SMD components, ensuring an efficient and space-saving layout. For replication or utilization of this design, the PCB can be ordered directly through the provided link:
+The device supports browser-based OTA:
 
-[Order PCB from Aisler](https://aisler.net/p/OSXMDHTM)
+- `/update` for firmware
+- `/updatefs` for LittleFS filesystem image
 
-Aisler offers quality PCB manufacturing services, ensuring that the PCBs are produced to match the precise specifications of the design files.
+It also exposes ArduinoOTA for LAN updates.
 
-## Circuit Imagery
+## SignalK Output
 
-For assembly and verification, high-resolution images of the circuit design are made available:
+The device publishes:
 
+- `environment.watermaker.pressure.low`
+- `environment.watermaker.pressure.high`
 
-- ![Circuit Overview][def3]
-- ![PCB Layout][def2]
+Current mapping:
 
-## Contributing
-Contributions to this project are welcome. Please fork the repository and submit a pull request with your changes.
+- low pressure comes from Sensor 1
+- high pressure comes from Sensor 2
+
+## Filesystem Content
+
+The web UI is stored in `data/` and uploaded to LittleFS.
+
+Important files:
+
+- `data/index.html`
+- `data/gauge.min.js`
+- `data/manifest.webmanifest`
+- `data/icon.svg`
+
+## Build And Upload
+
+This project uses PlatformIO.
+
+### Build
+
+```bash
+platformio run -e esp32dev
+```
+
+### Upload Firmware
+
+```bash
+platformio run -e esp32dev -t upload
+```
+
+### Upload Filesystem
+
+```bash
+platformio run -e esp32dev -t uploadfs
+```
+
+### Serial Monitor
+
+```bash
+platformio device monitor -b 115200
+```
+
+## Project Structure
+
+- [`src/main.cpp`](src/main.cpp): firmware logic
+- [`src/config_html.h`](src/config_html.h): settings page HTML
+- [`data/index.html`](data/index.html): dashboard UI
+- [`platformio.ini`](platformio.ini): PlatformIO environment
+- [`res/gauges.jpeg`](res/gauges.jpeg): legacy gauge reference
+- [`res/Schematics.png`](res/Schematics.png): hardware reference
+- [`res/pressure_pcb.png`](res/pressure_pcb.png): PCB reference
+- [`res/pressure_bom.html`](res/pressure_bom.html): BOM reference
+
+## Legacy Reference
+
+This repository derives from the original 8266 project:
+
+- https://github.com/jdiazrv/8266-pressure-sensor
+
+Relevant hardware concepts, gauge ranges, PCB references, and documentation were carried forward and adapted for the ESP32 implementation.
 
 ## License
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
 
-## Contact
-- Juan Diaz   
-
-
-
-[def]: /res/gauges.jpeg
-[def2]: /res/pressure_pcb.png
-[def3]: /res/Schematics.png
+See [LICENSE.md](LICENSE.md).

@@ -1,191 +1,722 @@
 <!doctype html>
-<html>
-
+<html lang="es">
 <head>
-  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-  <title>Gauge Test</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>MAB WaterMaker</title>
+  <meta name="theme-color" content="#0d1a2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="WaterMaker">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <style>
-    body {
-      padding: 0;
-      margin: 0;
-      background: #fff;
+    :root{
+      --bg:#07111b;
+      --bg2:#0b1724;
+      --panel:rgba(11,23,36,.86);
+      --line:rgba(255,255,255,.08);
+      --text:#f3f7fb;
+      --muted:#93a4b8;
+      --ok:#22c55e;
+      --warn:#f59e0b;
+      --danger:#ef4444;
+      --shadow:0 14px 34px rgba(0,0,0,.28);
+      --radius:20px;
+      --safe-top:env(safe-area-inset-top, 0px);
+      --safe-bottom:env(safe-area-inset-bottom, 0px);
     }
-
-    h2 {
-      text-align: center;
-      /* Centrar el título */
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html,body{margin:0;padding:0;height:100%;overflow:hidden;background:radial-gradient(circle at top,#0f2336 0%,#091420 38%,#050b12 100%);color:var(--text);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+    body::before{content:"";position:fixed;inset:0;background:linear-gradient(180deg,rgba(83,198,255,.08),transparent 24%), radial-gradient(circle at 80% 12%, rgba(83,198,255,.10), transparent 22%);pointer-events:none}
+    button,input,select,textarea{font:inherit}
+    .app{max-width:560px;height:100dvh;margin:0 auto;padding:calc(8px + var(--safe-top)) 10px calc(8px + var(--safe-bottom));display:grid;grid-template-rows:auto auto auto auto auto;gap:6px;position:relative;overflow:hidden;align-content:start}
+    .topbar,.hero,.pressure-card,.toast{backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+    .topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border-radius:18px;box-shadow:var(--shadow)}
+    .brand{display:flex;flex-direction:column;gap:1px}
+    .eyebrow{font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;color:#89b2cc;font-weight:700}
+    .title{font-size:1rem;font-weight:800;letter-spacing:.02em}
+    .top-actions{display:flex;align-items:center;gap:8px}
+    .conn{display:flex;align-items:center;gap:7px;padding:7px 10px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);font-size:.75rem;color:var(--muted);white-space:nowrap}
+    .dot{width:8px;height:8px;border-radius:50%;background:#66768a;box-shadow:0 0 0 4px rgba(255,255,255,.04);transition:all .25s ease}
+    .conn.ok .dot{background:var(--ok);box-shadow:0 0 14px rgba(34,197,94,.55)}
+    .conn.err .dot{background:var(--danger);box-shadow:0 0 14px rgba(239,68,68,.55)}
+    .mini-pill{display:flex;align-items:center;justify-content:center;min-width:34px;height:34px;padding:0 9px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:var(--muted);font-size:.68rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+    .mini-pill.ok{color:#b8eaff;border-color:rgba(83,198,255,.22);background:rgba(83,198,255,.10)}
+    .mini-pill.err{color:var(--muted)}
+    .wifi-pill{display:flex;align-items:center;gap:7px;height:34px;padding:0 10px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:var(--muted)}
+    .wifi-bars{display:flex;align-items:flex-end;gap:2px;height:14px}
+    .wifi-bars span{display:block;width:4px;border-radius:999px;background:rgba(255,255,255,.18);transition:all .25s ease}
+    .wifi-bars span:nth-child(1){height:5px}.wifi-bars span:nth-child(2){height:8px}.wifi-bars span:nth-child(3){height:11px}.wifi-bars span:nth-child(4){height:14px}
+    .wifi-pill.level-1 .wifi-bars span:nth-child(-n+1), .wifi-pill.level-2 .wifi-bars span:nth-child(-n+2), .wifi-pill.level-3 .wifi-bars span:nth-child(-n+3), .wifi-pill.level-4 .wifi-bars span:nth-child(-n+4){background:rgba(83,198,255,.95);box-shadow:0 0 10px rgba(83,198,255,.24)}
+    .wifi-pill.off .wifi-bars span{background:rgba(255,255,255,.12)}
+    .wifi-value{font-size:.66rem;font-weight:700;letter-spacing:.02em;min-width:46px;text-align:center;display:flex;align-items:center;justify-content:center;height:100%}
+    .icon-btn{width:42px;height:42px;border:none;border-radius:12px;background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(255,255,255,.05));color:var(--text);display:grid;place-items:center;border:1px solid rgba(255,255,255,.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.08);cursor:pointer;font-size:1.15rem;line-height:1}
+    .hero{padding:12px 14px;border-radius:22px;background:linear-gradient(180deg,rgba(18,33,49,.96),rgba(10,18,29,.92));border:1px solid var(--line);box-shadow:var(--shadow);position:relative;overflow:hidden}
+    .hero::after{content:"";position:absolute;inset:auto -25% -35% 40%;height:120px;background:radial-gradient(circle, rgba(83,198,255,.18), transparent 62%);pointer-events:none}
+    .hero-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}
+    .hero-copy small{display:block;color:#89b2cc;font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px;font-weight:700}
+    .hero-copy h1{margin:0;font-size:1rem;line-height:1.02;letter-spacing:-.03em}
+    .system-pill{padding:8px 11px;border-radius:999px;font-size:.72rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;background:rgba(83,198,255,.10);border:1px solid rgba(83,198,255,.22);color:#b8eaff;white-space:nowrap}
+    .hero-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+    .metric{padding:10px 12px;border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.025));border:1px solid rgba(255,255,255,.07)}
+    .metric-label{font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;font-weight:700}
+    .metric-value{font-size:1.05rem;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+    .metric-sub{margin-top:2px;font-size:.74rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .pressure-card{padding:8px 10px 7px;border-radius:22px;background:linear-gradient(180deg,rgba(15,29,44,.95),rgba(10,19,30,.92));border:1px solid var(--line);box-shadow:var(--shadow);display:flex;flex-direction:column;justify-content:flex-start;gap:4px;min-height:0;align-self:start}
+    .card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:2px}
+    .card-title-wrap{min-width:0}
+    .card-kicker{display:none}
+    .card-title{font-size:.94rem;font-weight:800;letter-spacing:-.02em}
+    .zone-chip{padding:4px 8px;border-radius:999px;font-size:.64rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);white-space:nowrap}
+    .zone-ok{color:#baf7cb;background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.24)}
+    .zone-warn{color:#ffd89a;background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.24)}
+    .zone-danger{color:#ffb3b3;background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.24)}
+    .zone-neutral{color:#d7e2ed;background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.08)}
+    .pressure-row{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-bottom:2px}
+    .pressure-value{font-size:3.2rem;line-height:.9;font-weight:850;letter-spacing:-.06em;font-variant-numeric:tabular-nums;display:flex;align-items:flex-end;gap:6px;flex-wrap:wrap}
+    .pressure-value .unit{font-size:1rem;line-height:1.2;color:var(--muted);font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding-bottom:5px}
+    .pressure-range{font-size:.68rem;color:var(--muted);text-align:right;min-width:58px}
+    .track-wrap{position:relative;padding-bottom:8px}
+    .track-shell{position:relative;padding:3px;border-radius:999px;background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+    .track-main{height:28px;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.06);position:relative}
+    .track-zones{display:flex;height:3px;overflow:hidden;border-radius:999px;opacity:.9;pointer-events:none;margin-top:5px;margin-left:3px;margin-right:3px}
+        .progress{position:absolute;top:0;bottom:0;left:0;height:100%;border-radius:999px 0 0 999px;background:linear-gradient(90deg,rgba(255,255,255,.95),rgba(255,255,255,.75));box-shadow:0 0 14px rgba(255,255,255,.12), inset 0 1px 0 rgba(255,255,255,.55);width:0;transition:width .45s cubic-bezier(.2,.9,.2,1), background .25s ease;z-index:2}
+    .progress::after{content:"";position:absolute;top:-8px;right:-3px;width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-top:11px solid rgba(255,255,255,.95);filter:drop-shadow(0 2px 3px rgba(0,0,0,.25))}
+    .range-mark{position:absolute;top:1px;width:2px;height:26px;background:rgba(255,255,255,.95);border-radius:999px;transform:translateX(-50%);box-shadow:0 0 8px rgba(255,255,255,.26);display:none;z-index:4}
+    .range-mark::before{content:"";position:absolute;top:-3px;left:50%;transform:translateX(-50%);width:8px;height:2px;border-radius:999px;background:rgba(255,255,255,.9);box-shadow:0 0 6px rgba(255,255,255,.22)}
+    .tick-row{display:flex;justify-content:space-between;gap:6px;padding:4px 2px 0;color:#7990a6;font-size:.64rem;font-variant-numeric:tabular-nums}
+    .meta-strip{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:2px;font-size:.64rem;color:var(--muted)}
+    .meta-strip strong{color:var(--text);font-weight:700}
+    .status-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .footer-note{padding:10px 12px;border-radius:16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-size:.76rem;min-width:0}
+    .footer-note strong{color:var(--text);font-weight:700}
+    .footer-note span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .stats,.detail-row{display:none}
+    .toast{position:fixed;left:16px;right:16px;bottom:calc(18px + var(--safe-bottom));padding:14px 16px;border-radius:18px;background:rgba(110,20,20,.92);border:1px solid rgba(255,255,255,.08);color:#ffe1e1;transform:translateY(140%);transition:transform .25s ease;z-index:40;box-shadow:var(--shadow)}
+    .toast.visible{transform:translateY(0)}
+    .hidden-config{display:none}
+    @media (min-width: 620px){
+      .app{padding-left:18px;padding-right:18px}
+      .pressure-value{font-size:2.7rem}
     }
-
-    .canvas-container {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: space-around;
-    }
-
-    .canvas-title {
-      text-align: center;
-      font-size: 24px;
-    }
-
-    /* Media query para pantallas pequeñas */
-    @media (max-width: 700px) {
-      canvas {
-        width: 100%;
-        /* Ajustar al ancho disponible */
-        height: auto;
-        /* Maintain the canvas aspect ratio */
-      }
-
-      .canvas-title {
-        font-size: 20px;
-        /* Slightly larger font size */
-
-      }
-    }
-
-    /* Style for the settings button */
-    .button {
-      background-color: #ffffff;
-      border-radius: 1px;
-      border: none;
-      color: black;
-      padding: 16px 20px;
-      /* Double the padding */
-      text-align: center;
-      text-decoration: none;
-      display: inline-block;
-      font-size: 40px;
-      /* Double the font size */
-      margin: 1px 2px;
-      cursor: pointer;
-      position: absolute;
-      /* Position the button absolutely */
-      right: 5px;
-      /* 5px from the right margin */
-    }
-  </style>
   </style>
 </head>
-
 <body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="eyebrow">MAB Systems</div>
+        <div class="title">WaterMaker</div>
+      </div>
+      <div class="top-actions">
+        <div class="mini-pill err" id="skPill" title="Signal K. Toca para cambiar la IP"><span id="skText">SK</span></div>
+        <div class="conn" id="connectionPill"><span class="dot" id="statusDot"></span><span id="statusText">Connecting…</span></div>
+        <div class="wifi-pill off" id="wifiPill" title="RSSI WiFi ESP32"><div class="wifi-bars" aria-hidden="true"><span></span><span></span><span></span><span></span></div><span class="wifi-value" id="wifiValue">--</span></div>
+        <button class="icon-btn" onclick="window.location='/config'" aria-label="Configuración">⚙</button>
+      </div>
+    </header>
 
-  <button onclick="animateGauges()">Animate</button>
-  <button onclick="stopGaugesAnimation()">Stop animation</button>
+    <section class="hero">
+      <div class="hero-head">
+        <div class="hero-copy">
+          <small>Vista principal</small>
+          <h1 id="heroHeadline">Sistema en espera</h1>
+        </div>
+        <div class="system-pill" id="heroStatus">Offline</div>
+      </div>
+      <div class="hero-grid">
+        <div class="metric">
+          <div class="metric-label">Tiempo parcial</div>
+          <div class="metric-value" id="partialTime">00:00:00</div>
+          <div class="metric-sub" id="partialSub">Equipo detenido</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Tiempo total</div>
+          <div class="metric-value" id="totalTime">0.0 h</div>
+          <div class="metric-sub" id="totalSub">Acumulado local del navegador</div>
+        </div>
+      </div>
+    </section>
 
-  <hr>
-  <h2>MAB WaterMaker</h2>
-  <input type="button" class="button" value="⚙️" onclick="window.location='/config'">
-  <div class="canvas-container">
-    <canvas data-type="radial-gauge" data-value="3" data-width="650" data-height="650" data-bar-width="10"
-      data-bar-shadow="5" data-color-bar-progress="rgba(50,200,50,.75)" data-min-value="0" data-max-value="4"
-      data-units="bar" data-title="Low Pressure" data-minor-ticks="5" data-major-ticks="0,1,2,3,4"
-      data-value-int="2" 
-      data-value-dec="2"
-      data-bar-start-position="left" // Color rojo fosforescente para la aguja data-highlights='[
-            { "from": 0, "to": 1, "color": "rgba(255,165,0, .5)" },  
-            { "from": 1, "to": 3, "color": "rgba(0,128,0, .5)" },   
-            { "from": 3, "to": 4, "color": "rgba(255,0,0, .5)" }  
-          ]' data-major-ticks="1,2,3,4," data-bar-start-position="left">
-    </canvas>
-    <div style="height: 50px;"></div> <!-- 20px space between the canvases -->
-    <canvas data-type="radial-gauge" data-value="40" data-width="650" data-height="650" data-bar-width="10"
-      data-bar-shadow="5" data-color-bar-progress="rgba(50,200,50,.75)" data-min-value="0" data-max-value="70"
-      data-value-int="2" 
-      data-value-dec="2"
-      data-units="bar" data-title="High Pressure" data-minor-ticks="5" data-major-ticks="0,10,20,30,40,50,60,70"
-      data-bar-start-position="left" data-highlights='[
-                    { "from": 0, "to": 50, "color": "rgba(255,165,0, .5)" },  
-                    { "from": 50, "to": 57, "color": "rgba(0,128,0, .5)" },   
-                    { "from": 57, "to": 60, "color": "rgba(255,165,0, .5)" },   
-                    { "from": 60, "to": 70, "color": "rgba(255,0,0, .5)" }
-                  ]'></canvas>
+    <section class="pressure-card" id="lowCard">
+      <div class="card-head">
+        <div class="card-title-wrap">
+          <div class="card-title">Presión de entrada</div>
+        </div>
+        <div class="zone-chip zone-neutral" id="lowZone">Espera</div>
+      </div>
+      <div class="pressure-row">
+        <div class="pressure-value"><span id="valueLow">--</span><span class="unit">bar</span></div>
+        <div class="pressure-range"><span id="lowMin">0</span> · <span id="lowMax">0</span></div>
+      </div>
+      <div class="track-wrap">
+        <div class="track-shell">
+          <div class="track-main" id="lowTrack">
+            <div class="range-mark" id="lowTargetStart"></div>
+            <div class="range-mark" id="lowTargetEnd"></div>
+            <div class="progress" id="lowProgress"></div>
+          </div>
+        </div>
+        <div class="track-zones" id="lowZones"></div>
+        <div class="tick-row"><span id="lowTickMin">0</span><span id="lowTickMid">0</span><span id="lowTickMax">0</span></div>
+      </div>
+      <div class="meta-strip"><span class="status-line">Estado: <strong id="lowState">--</strong></span></div>
+    </section>
+
+    <section class="pressure-card" id="highCard">
+      <div class="card-head">
+        <div class="card-title-wrap">
+          <div class="card-title">Presión principal</div>
+        </div>
+        <div class="zone-chip zone-neutral" id="highZone">Espera</div>
+      </div>
+      <div class="pressure-row">
+        <div class="pressure-value"><span id="valueHigh">--</span><span class="unit">bar</span></div>
+        <div class="pressure-range"><span id="highMin">0</span> · <span id="highMax">0</span></div>
+      </div>
+      <div class="track-wrap">
+        <div class="track-shell">
+          <div class="track-main" id="highTrack">
+            <div class="range-mark" id="highTargetStart"></div>
+            <div class="range-mark" id="highTargetEnd"></div>
+            <div class="progress" id="highProgress"></div>
+          </div>
+        </div>
+        <div class="track-zones" id="highZones"></div>
+        <div class="tick-row"><span id="highTickMin">0</span><span id="highTickMid">0</span><span id="highTickMax">0</span></div>
+      </div>
+      <div class="meta-strip"><span class="status-line">Estado: <strong id="highState">--</strong></span></div>
+    </section>
+
+    <div class="footer-note"><span><strong id="footerHeadline">Última lectura</strong></span><span id="footerDetail">--:--:--</span></div>
+
+    <!-- Hidden config sources: preserve existing limits and highlights -->
+    <canvas class="hidden-config" id="gaugeLow" data-min-value="0" data-max-value="4" data-highlights='[{"from":0,"to":1,"color":"rgba(255,165,0,.5)"},{"from":1,"to":3,"color":"rgba(0,128,0,.5)"},{"from":3,"to":4,"color":"rgba(255,0,0,.5)"}]'></canvas>
+    <canvas class="hidden-config" id="gaugeHigh" data-min-value="0" data-max-value="70" data-highlights='[{"from":0,"to":50,"color":"rgba(255,165,0,.5)"},{"from":50,"to":57,"color":"rgba(0,128,0,.5)"},{"from":57,"to":60,"color":"rgba(255,165,0,.5)"},{"from":60,"to":70,"color":"rgba(255,0,0,.5)"}]'></canvas>
   </div>
 
-  <script async src="gauge.min.js"></script>
-  <!-- The rest of the script remains the same -->
+  <div class="toast" id="errorToast"></div>
 
   <script>
-    if (!Array.prototype.forEach) {
-      Array.prototype.forEach = function(cb) {
-        var i = 0,
-          s = this.length;
-        for (; i < s; i++) {
-          cb && cb(this[i], i, this);
+    const UI_VERSION = 'v14';
+
+    var isConnected = false;
+    var hasValidReading = false;
+    var lastValidReadingTime = null;
+    var currentRSSI = null;
+    var currentSignalkIp = '0.0.0.0';
+    var currentDeviceError = '';
+    var currentFirmwareVersion = '--';
+    var updateInterval = 1000;
+    var runtime = {
+      running: false,
+      currentStartMs: null,
+      accumulatedMs: 0,
+      lastPersistMs: 0
+    };
+
+    var STORAGE_KEY = 'mab_watermaker_total_runtime_ms';
+    var HISTORY_WINDOW_MS = 5 * 60 * 1000;
+    var DEMO_SWEEP_STEP_MS = 38;
+    var demoSweepTimer = null;
+    var sensorHistory = { low: [], high: [] };
+    var gauges = {
+      low: buildGaugeConfig('gaugeLow', {
+        valueEl: 'valueLow', progressEl: 'lowProgress', zonesEl: 'lowZones', trackMainEl: 'lowTrack',
+        minEl: 'lowMin', maxEl: 'lowMax', tickMin: 'lowTickMin', tickMid: 'lowTickMid', tickMax: 'lowTickMax',
+        zoneChip: 'lowZone', stateEl: 'lowState', targetEl: 'lowTarget', targetStartEl: 'lowTargetStart', targetEndEl: 'lowTargetEnd'
+      }),
+      high: buildGaugeConfig('gaugeHigh', {
+        valueEl: 'valueHigh', progressEl: 'highProgress', zonesEl: 'highZones', trackMainEl: 'highTrack',
+        minEl: 'highMin', maxEl: 'highMax', tickMin: 'highTickMin', tickMid: 'lowTickMid_unused', tickMax: 'highTickMax',
+        zoneChip: 'highZone', stateEl: 'highState', targetEl: 'highTarget', targetStartEl: 'highTargetStart', targetEndEl: 'highTargetEnd'
+      })
+    };
+    // fix high mid tick id separately
+    gauges.high.refs.tickMid = document.getElementById('highTickMid');
+
+    document.addEventListener('DOMContentLoaded', function() {
+      hydrateStoredRuntime();
+      initializeUI();
+      startDemoSweep();
+      document.getElementById('skPill').addEventListener('click', promptSignalKIp);
+      document.getElementById('connectionPill').addEventListener('click', showStatusDetails);
+      updateConnectionStatus();
+      updateGauges();
+      setInterval(updateGauges, updateInterval);
+      setInterval(updateRuntimeUI, 1000);
+    });
+
+    function buildGaugeConfig(configId, ids) {
+      var source = document.getElementById(configId);
+      var min = parseFloat(source.getAttribute('data-min-value')) || 0;
+      var max = parseFloat(source.getAttribute('data-max-value')) || 100;
+      var highlights = [];
+      try {
+        highlights = JSON.parse(source.getAttribute('data-highlights') || '[]');
+      } catch (e) {
+        highlights = [];
+      }
+      return {
+        source: source,
+        min: min,
+        max: max,
+        range: Math.max(max - min, 1),
+        highlights: highlights,
+        refs: {
+          value: document.getElementById(ids.valueEl),
+          progress: document.getElementById(ids.progressEl),
+          zones: document.getElementById(ids.zonesEl),
+          trackMain: document.getElementById(ids.trackMainEl),
+          min: document.getElementById(ids.minEl),
+          max: document.getElementById(ids.maxEl),
+          tickMin: document.getElementById(ids.tickMin),
+          tickMid: document.getElementById(ids.tickMid),
+          tickMax: document.getElementById(ids.tickMax),
+          chip: document.getElementById(ids.zoneChip),
+          state: document.getElementById(ids.stateEl),
+          target: document.getElementById(ids.targetEl),
+          targetStart: document.getElementById(ids.targetStartEl),
+          targetEnd: document.getElementById(ids.targetEndEl)
+        }
+      };
+    }
+
+    function initializeUI() {
+      renderZoneTrack(gauges.low);
+      renderZoneTrack(gauges.high);
+      renderSweepFrame(gauges.low, gauges.low.min);
+      renderSweepFrame(gauges.high, gauges.high.min);
+      writeStaticRangeLabels(gauges.low);
+      writeStaticRangeLabels(gauges.high);
+      gauges.low.refs.value.textContent = '--';
+      gauges.high.refs.value.textContent = '--';
+      document.getElementById('footerDetail').textContent = '--:--:--';
+    }
+
+
+    function startDemoSweep() {
+      if (demoSweepTimer || hasValidReading) return;
+      var steps = 36;
+      var index = 0;
+      var sequence = [];
+      for (var i = 0; i <= steps; i++) sequence.push(i / steps);
+      for (var j = steps - 1; j >= 0; j--) sequence.push(j / steps);
+      demoSweepTimer = setInterval(function() {
+        if (hasValidReading) { stopDemoSweep(); return; }
+        if (index >= sequence.length) {
+          stopDemoSweep();
+          renderSweepFrame(gauges.low, gauges.low.min);
+          renderSweepFrame(gauges.high, gauges.high.min);
+          return;
+        }
+        var ratio = sequence[index];
+        renderSweepFrame(gauges.low, gauges.low.min + gauges.low.range * ratio);
+        renderSweepFrame(gauges.high, gauges.high.min + gauges.high.range * ratio);
+        index++;
+      }, DEMO_SWEEP_STEP_MS);
+    }
+
+    function stopDemoSweep() {
+      if (!demoSweepTimer) return;
+      clearInterval(demoSweepTimer);
+      demoSweepTimer = null;
+    }
+
+    function renderSweepFrame(cfg, value) {
+      var bounded = clamp(value, cfg.min, cfg.max);
+      var pct = ((bounded - cfg.min) / cfg.range) * 100;
+      cfg.refs.progress.style.width = pct.toFixed(3) + '%';
+      cfg.refs.progress.style.background = progressFillForValue(cfg, bounded, false);
+      cfg.refs.value.textContent = bounded.toFixed(1);
+    }
+
+
+    function progressFillForValue(cfg, value, emphasize) {
+      var zone = locateZone(cfg.highlights, value);
+      var base = zone && zone.color ? zone.color : 'rgba(255,255,255,.82)';
+      var glow = emphasize ? '.34' : '.18';
+      if (base.indexOf('rgba(') === 0) {
+        var strong = base.replace(/rgba\(([^)]+),\s*([0-9.]+)\)/, 'rgba($1,0.92)');
+        var soft = base.replace(/rgba\(([^)]+),\s*([0-9.]+)\)/, 'rgba($1,0.68)');
+        return 'linear-gradient(90deg,' + strong + ',' + soft + ')';
+      }
+      return 'linear-gradient(90deg,' + base + ',' + base + ')';
+    }
+
+    function extractRSSI(data) {
+      if (!data || typeof data !== 'object') return null;
+      var keys = ['rssi', 'wifi_rssi', 'wifiRSSI', 'signalK_rssi', 'wifiSignal'];
+      for (var i = 0; i < keys.length; i++) {
+        if (data.hasOwnProperty(keys[i])) {
+          var v = parseFloat(data[keys[i]]);
+          if (!isNaN(v)) return v;
         }
       }
+      return null;
     }
-    document.fonts && document.fonts.forEach(function(font) {
-      font.loaded.then(function() {
-        if (font.family.match(/Led/)) {
-          document.gauges.forEach(function(gauge) {
-            gauge.update();
-          });
+
+    function updateRSSI(rssi) {
+      currentRSSI = typeof rssi === 'number' && !isNaN(rssi) ? rssi : null;
+      var pill = document.getElementById('wifiPill');
+      var valueEl = document.getElementById('wifiValue');
+      pill.className = 'wifi-pill';
+      if (currentRSSI === null) {
+        pill.classList.add('off');
+        valueEl.textContent = '--';
+        document.getElementById('totalSub').textContent = 'Acumulado local del navegador';
+        return;
+      }
+      var level = 1;
+      if (currentRSSI >= -55) level = 4;
+      else if (currentRSSI >= -67) level = 3;
+      else if (currentRSSI >= -75) level = 2;
+      pill.classList.add('level-' + level);
+      valueEl.textContent = Math.round(currentRSSI) + ' dBm';
+      document.getElementById('totalSub').textContent = 'Acumulado local del navegador';
+    }
+
+    function updateSignalKPill() {
+      var pill = document.getElementById('skPill');
+      pill.classList.remove('ok', 'err');
+      pill.classList.add(currentSignalkIp !== '0.0.0.0' ? 'ok' : 'err');
+    }
+
+    function promptSignalKIp() {
+      var nextIp = window.prompt('SignalK IP (usa 0.0.0.0 para redescubrir)', currentSignalkIp || '0.0.0.0');
+      if (nextIp === null) return;
+      nextIp = nextIp.trim();
+      if (!nextIp) nextIp = '0.0.0.0';
+
+      var xhr = new XMLHttpRequest();
+      xhr.onreadystatechange = function() {
+        if (this.readyState !== 4) return;
+        if (this.status === 200) {
+          try {
+            var data = JSON.parse(this.responseText);
+            currentSignalkIp = data && data.ip ? data.ip : '0.0.0.0';
+            updateSignalKPill();
+            showError('SignalK IP: ' + currentSignalkIp);
+          } catch (e) {
+            showError('No se pudo actualizar la IP de SignalK');
+          }
+        } else {
+          showError('IP de SignalK invalida');
         }
-      });
-    });
-    var timers = [];
-
-    function animateGauges() {
-      document.gauges.forEach(function(gauge) {
-        timers.push(setInterval(function() {
-          var min = gauge.options.minValue + 0;
-          var max = gauge.options.maxValue + 4;
-          gauge.value = min + Math.random() * (max - min);
-        }, gauge.animation.duration + 50));
-      });
+      };
+      xhr.open('GET', '/set-signalk?ip=' + encodeURIComponent(nextIp), true);
+      xhr.send();
     }
 
-    function stopGaugesAnimation() {
-      timers.forEach(function(timer) {
-        clearInterval(timer);
-        la
-      });
+    function writeStaticRangeLabels(cfg) {
+      cfg.refs.min.textContent = formatBar(cfg.min);
+      cfg.refs.max.textContent = formatBar(cfg.max);
+      cfg.refs.tickMin.textContent = formatBar(cfg.min);
+      cfg.refs.tickMid.textContent = formatBar(cfg.min + cfg.range / 2);
+      cfg.refs.tickMax.textContent = formatBar(cfg.max);
+      clearRangeMarkers(cfg);
+    }
+
+    function setRangeMarkers(cfg, from, to) {
+      var startPct = ((from - cfg.min) / cfg.range) * 100;
+      var endPct = ((to - cfg.min) / cfg.range) * 100;
+      cfg.refs.targetStart.style.left = startPct.toFixed(3) + '%';
+      cfg.refs.targetEnd.style.left = endPct.toFixed(3) + '%';
+      cfg.refs.targetStart.style.display = 'block';
+      cfg.refs.targetEnd.style.display = 'block';
+    }
+
+    function clearRangeMarkers(cfg) {
+      cfg.refs.targetStart.style.display = 'none';
+      cfg.refs.targetEnd.style.display = 'none';
+    }
+
+    function pruneHistory(list, nowMs) {
+      var cutoff = nowMs - HISTORY_WINDOW_MS;
+      while (list.length && list[0].ts < cutoff) list.shift();
+    }
+
+    function updateGaugeHistory(cfg, key, value) {
+      if (!(value > 0)) return;
+      var nowMs = Date.now();
+      var list = sensorHistory[key];
+      list.push({ ts: nowMs, value: value });
+      pruneHistory(list, nowMs);
+      if (!list.length) {
+          clearRangeMarkers(cfg);
+        return;
+      }
+      var minVal = list[0].value;
+      var maxVal = list[0].value;
+      for (var i = 1; i < list.length; i++) {
+        minVal = Math.min(minVal, list[i].value);
+        maxVal = Math.max(maxVal, list[i].value);
+      }
+      setRangeMarkers(cfg, clamp(minVal, cfg.min, cfg.max), clamp(maxVal, cfg.min, cfg.max));
+    }
+
+    function renderZoneTrack(cfg) {
+      var html = '';
+      if (!cfg.highlights.length) {
+        html = '<div class="zone-seg" style="width:100%;background:rgba(255,255,255,.12)"></div>';
+      } else {
+        cfg.highlights.forEach(function(zone) {
+          var width = Math.max(0, ((zone.to - zone.from) / cfg.range) * 100);
+          html += '<div class="zone-seg" style="width:' + width + '%;background:' + sanitizeColor(zone.color) + '"></div>';
+        });
+      }
+      cfg.refs.zones.innerHTML = html;
+
+      if (cfg.refs.trackMain) {
+        var marks = cfg.refs.trackMain.querySelectorAll('.zone-divider');
+        marks.forEach(function(mark) { mark.remove(); });
+      }
+    }
+
+    function sanitizeColor(color) {
+      if (!color) return 'rgba(255,255,255,.12)';
+      return color.replace(/\.5\)/g, '.52)').replace(/\.4\)/g, '.46)').replace(/0\.72\)/g, '0.52)').replace(/0\.62\)/g, '0.46)');
+    }
+
+    function updateConnectionStatus() {
+      var pill = document.getElementById('connectionPill');
+      var text = document.getElementById('statusText');
+      pill.classList.remove('ok', 'err');
+      if (currentDeviceError) {
+        pill.classList.add('err');
+        text.textContent = 'Error';
+      } else if (isConnected) {
+        pill.classList.add('ok');
+        text.textContent = 'Online';
+      } else {
+        pill.classList.add('err');
+        text.textContent = 'Offline';
+      }
+      updateSignalKPill();
+    }
+
+    function showError(message) {
+      var toast = document.getElementById('errorToast');
+      toast.textContent = message;
+      toast.classList.add('visible');
+      setTimeout(function() { toast.classList.remove('visible'); }, 4200);
+    }
+
+    function showStatusDetails() {
+      var parts = [];
+      parts.push('FW: ' + currentFirmwareVersion);
+      parts.push('UI: ' + UI_VERSION);
+      if (currentDeviceError) parts.push('Equipo: ' + currentDeviceError);
+      else if (isConnected) parts.push('Equipo sin errores detectados');
+      else parts.push('Sin datos validos del equipo');
+      showError(parts.join(' | '));
+    }
+
+    function updateLastUpdateTime() {
+      if (!lastValidReadingTime) {
+        document.getElementById('footerDetail').textContent = '--:--:--';
+        document.getElementById('partialSub').textContent = 'Última lectura --:--:--';
+        return;
+      }
+      var timeString = new Date(lastValidReadingTime).toLocaleTimeString();
+      document.getElementById('footerDetail').textContent = 'Última lectura ' + timeString;
+      document.getElementById('partialSub').textContent = 'Última lectura ' + timeString;
+    }
+
+    function hydrateStoredRuntime() {
+      var saved = parseInt(localStorage.getItem(STORAGE_KEY) || '0', 10);
+      runtime.accumulatedMs = isNaN(saved) ? 0 : saved;
+      runtime.lastPersistMs = runtime.accumulatedMs;
+    }
+
+    function persistRuntime(force) {
+      var total = runtime.accumulatedMs + (runtime.running && runtime.currentStartMs ? (Date.now() - runtime.currentStartMs) : 0);
+      if (force || Math.abs(total - runtime.lastPersistMs) >= 60000) {
+        localStorage.setItem(STORAGE_KEY, String(total));
+        runtime.lastPersistMs = total;
+      }
+    }
+
+    function updateRuntimeState(highValue) {
+      var cfg = gauges.high;
+      var green = findPrimaryGreenRange(cfg.highlights);
+      var runningThreshold = green ? Math.max(cfg.min, green.from) : (cfg.min + cfg.range * 0.18);
+      var nowRunning = highValue >= runningThreshold;
+      if (nowRunning && !runtime.running) {
+        runtime.running = true;
+        runtime.currentStartMs = Date.now();
+      } else if (!nowRunning && runtime.running) {
+        runtime.accumulatedMs += Date.now() - runtime.currentStartMs;
+        runtime.running = false;
+        runtime.currentStartMs = null;
+        persistRuntime(true);
+      }
+      if (runtime.running) persistRuntime(false);
+      updateRuntimeUI();
+    }
+
+    function updateRuntimeUI() {
+      var partialMs = runtime.running && runtime.currentStartMs ? (Date.now() - runtime.currentStartMs) : 0;
+      var totalMs = runtime.accumulatedMs + partialMs;
+      document.getElementById('partialTime').textContent = formatDuration(partialMs);
+      document.getElementById('totalTime').textContent = formatHours(totalMs);
+      document.getElementById('partialSub').textContent = runtime.running ? 'Equipo en marcha' : 'Equipo detenido';
+      updateLastUpdateTime();
+    }
+
+    function updateGaugeCard(cfg, value, historyKey) {
+      var bounded = clamp(value, cfg.min, cfg.max);
+      cfg.refs.value.textContent = value.toFixed(1);
+      renderSweepFrame(cfg, bounded);
+      cfg.refs.progress.style.background = progressFillForValue(cfg, bounded, true);
+      var zone = locateZone(cfg.highlights, bounded);
+      applyZoneState(cfg, zone, bounded);
+      updateGaugeHistory(cfg, historyKey, value);
+    }
+
+    function locateZone(highlights, value) {
+      for (var i = 0; i < highlights.length; i++) {
+        var z = highlights[i];
+        if (value >= z.from && value <= z.to) return z;
+      }
+      return null;
+    }
+
+    function applyZoneState(cfg, zone, value) {
+      var chip = cfg.refs.chip;
+      var state = classifyZone(zone);
+      chip.className = 'zone-chip ' + state.className;
+      cfg.refs.state.textContent = state.state;
+      chip.textContent = state.label;
+    }
+
+    function classifyZone(zone) {
+      if (!zone || !zone.color) return { label:'Sin rango', state:'Espera', className:'zone-neutral' };
+      var color = zone.color.toLowerCase();
+      if (color.indexOf('0,128,0') !== -1 || color.indexOf('34,197,94') !== -1) return { label:'Normal', state:'Estable', className:'zone-ok' };
+      if (color.indexOf('255,0,0') !== -1 || color.indexOf('239,68,68') !== -1) return { label:'Alarma', state:'Alta', className:'zone-danger' };
+      return { label:'Aviso', state:'Atención', className:'zone-warn' };
+    }
+
+    function updateHero(lowValue, highValue) {
+      var heroHeadline = document.getElementById('heroHeadline');
+      var heroStatus = document.getElementById('heroStatus');
+      var highClass = classifyZone(locateZone(gauges.high.highlights, clamp(highValue, gauges.high.min, gauges.high.max)));
+      var statusText = 'Offline';
+      var headline = 'Esperando presión';
+
+      if (isConnected) {
+        statusText = 'Online';
+        if (!hasValidReading) {
+          headline = 'Esperando presión';
+        } else if (runtime.running) {
+          headline = highClass.label === 'Alarma' ? 'Alta presión fuera de rango' : 'Sistema activo';
+        } else {
+          headline = 'Sistema en espera';
+        }
+      }
+
+      heroHeadline.textContent = headline;
+      heroStatus.textContent = statusText;
     }
 
     function updateGauges() {
       var xhr = new XMLHttpRequest();
       xhr.onreadystatechange = function() {
-        if (this.readyState == 4 && this.status == 200) {
+        if (this.readyState !== 4) return;
+        if (this.status === 200) {
           try {
             var data = JSON.parse(this.responseText);
-            var gauge1 = document.querySelector('[data-title="Low Pressure"]');
-            var gauge2 = document.querySelector('[data-title="High Pressure"]');
-            var pressure1Div = document.getElementById('pressure1');
-            var pressure2Div = document.getElementById('pressure2');
-            if (gauge1 && gauge2) {
-              if (data.hasOwnProperty('pressure1') && data.hasOwnProperty('pressure2')) {
-                gauge1.setAttribute('data-value', data.pressure1);
-                gauge2.setAttribute('data-value', data.pressure2);
-                // Update the text of the divs with the new pressure values
-                pressure1Div.textContent = 'Pressure 1: ' + data.pressure1;
-                pressure2Div.textContent = 'Pressure 2: ' + data.pressure2;
-                // Refresh the gauges after updating the values
-                document.gauges.forEach(function(gauge) {
-                  gauge.update();
-                });
+            if (data && data.hasOwnProperty('pressure1') && data.hasOwnProperty('pressure2')) {
+              var low = parseFloat(data.pressure1);
+              var high = parseFloat(data.pressure2);
+              if (isNaN(low) || isNaN(high)) throw new Error('NaN values');
+              var validReading = !!(data && data.dataValid);
+              currentSignalkIp = (data && data.signalkIp) ? String(data.signalkIp) : '0.0.0.0';
+              currentDeviceError = (data && data.error) ? String(data.error) : '';
+              currentFirmwareVersion = (data && data.firmwareVersion) ? String(data.firmwareVersion) : '--';
+              updateRSSI(extractRSSI(data));
+              isConnected = true;
+              updateConnectionStatus();
+              if (validReading) {
+                hasValidReading = true;
+                lastValidReadingTime = Date.now();
+                stopDemoSweep();
+                updateGaugeCard(gauges.low, low, 'low');
+                updateGaugeCard(gauges.high, high, 'high');
+                updateRuntimeState(high);
+                updateLastUpdateTime();
+                updateHero(low, high);
               } else {
-                console.error("Invalid data received from server: missing pressure1 or pressure2");
+                updateHero(low, high);
+                updateLastUpdateTime();
               }
+            } else {
+              throw new Error('Invalid payload');
             }
           } catch (e) {
-            console.error("Error parsing server response: ", e);
+            isConnected = false;
+            currentDeviceError = '';
+            currentFirmwareVersion = '--';
+            updateConnectionStatus();
+            showError('Error leyendo /pressure');
           }
+        } else {
+          isConnected = false;
+          currentDeviceError = '';
+          currentFirmwareVersion = '--';
+          updateConnectionStatus();
+          showError('Fallo HTTP ' + this.status + ' al leer /pressure');
         }
       };
       xhr.onerror = function() {
-        console.error("Request failed");
+        isConnected = false;
+        currentDeviceError = '';
+        currentFirmwareVersion = '--';
+        updateConnectionStatus();
+        showError('Error de red con el ESP8266');
       };
       try {
-        xhr.open("GET", "http://watermaker.local/pressure", true); // Replace with your server URL
+        xhr.open('GET', '/pressure', true);
         xhr.send();
       } catch (e) {
-        console.error("Error sending request: ", e);
+        isConnected = false;
+        currentDeviceError = '';
+        currentFirmwareVersion = '--';
+        updateConnectionStatus();
+        showError('No se pudo enviar la petición');
       }
     }
-    setInterval(updateGauges, 1000); // Update the gauges every 2 seconds
+
+    function findPrimaryGreenRange(highlights) {
+      for (var i = 0; i < highlights.length; i++) {
+        var color = (highlights[i].color || '').toLowerCase();
+        if (color.indexOf('0,128,0') !== -1 || color.indexOf('34,197,94') !== -1) return highlights[i];
+      }
+      return null;
+    }
+
+    function formatBar(value) {
+      return Number(value).toFixed(value >= 10 ? 0 : 1).replace(/\.0$/, '');
+    }
+
+    function formatHours(ms) {
+      return (ms / 3600000).toFixed(1) + ' h';
+    }
+
+    function formatDuration(ms) {
+      var totalSec = Math.max(0, Math.floor(ms / 1000));
+      var h = String(Math.floor(totalSec / 3600)).padStart(2, '0');
+      var m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
+      var s = String(totalSec % 60).padStart(2, '0');
+      return h + ':' + m + ':' + s;
+    }
+
+    function clamp(v, min, max) {
+      return Math.min(max, Math.max(min, v));
+    }
   </script>
-
 </body>
-
 </html>
