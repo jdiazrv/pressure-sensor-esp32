@@ -972,96 +972,83 @@ void probeSignalKServer(bool force)
 {
     SharedStateSnapshot snapshot;
     captureSharedState(snapshot);
-    
-    // Read wifiMode under lock for consistency
-    lockState();
-    int currentWifiMode = wifiModeApSta;
-    unlockState();
-    
-    if (currentWifiMode != 1 || WiFi.status() != WL_CONNECTED)
+
+    // Use new state-based check
+    if (!shouldAttemptSignalKProbe() && !force)
     {
-        lockState();
-        signalkServerReachable = false;
-        unlockState();
+        // Check if we should skip because of state
+        if (signalkCtx.state == SK_DISABLED || 
+            signalkCtx.state == SK_NO_TARGET ||
+            signalkCtx.state == SK_DISCOVERING)
+            return;
+    }
+
+    // If no target IP, nothing to probe
+    if (signalkCtx.targetIp == IPAddress(0,0,0,0) && ip1 == IPAddress(0,0,0,0))
+    {
         return;
     }
 
-    if (!isValidIP(snapshot.signalkIp))
+    // Use legacy ip1 if context targetIp is not set
+    IPAddress probeIp = (signalkCtx.targetIp != IPAddress(0,0,0,0)) 
+                         ? signalkCtx.targetIp 
+                         : ip1;
+    uint16_t probePort = (signalkCtx.servicePort != 0) 
+                          ? signalkCtx.servicePort 
+                          : signalkServicePort;
+
+    if (!isValidIP(probeIp))
     {
-        lockState();
-        signalkServerReachable = false;
-        unlockState();
         return;
     }
 
     unsigned long now = millis();
-
-    lockState();
-    unsigned long lastProbe = lastSignalkProbeMs;
-    unlockState();
-
-    // Use FAST interval if recently unreachable, SLOW otherwise
-    unsigned long probeInterval = SIGNALK_PROBE_SLOW_MS;
-    lockState();
-    // Check if state is SK_UNREACHABLE (value 5) for fast retry
-    if (signalkCtx.state == SK_UNREACHABLE)
-        probeInterval = SIGNALK_PROBE_FAST_MS;
-    unlockState();
     
-    if (!force && lastProbe != 0 && now - lastProbe < probeInterval)
-        return;
+    // Update timing (legacy compatibility)
+    if (!force)
+    {
+        lockState();
+        lastSignalkProbeMs = now;
+        signalkCtx.lastProbeMs = now;
+        unlockState();
+    }
 
-    lockState();
-    lastSignalkProbeMs = now;
-    unlockState();
-
-    bool previousState = snapshot.signalkAlive;
-    String target = snapshot.signalkIp.toString() + ":" + String(snapshot.signalkServicePort);
+    bool previousReachable = signalkServerReachable;
+    String target = probeIp.toString() + ":" + String(probePort);
     WiFiClient client;
     client.setTimeout(1);
-    bool connected = client.connect(snapshot.signalkIp, snapshot.signalkServicePort, SIGNALK_TCP_PROBE_TIMEOUT_MS);
-    
-    lockState();
-    signalkServerReachable = connected;
-    if (connected)
-    {
-        signalkHadSuccessfulProbe = true;
-    }
-    bool discoveryPending = signalkDiscoveryPending;
-    bool hadSuccessfulProbe = signalkHadSuccessfulProbe;
-    bool discoveryContinuous = signalkDiscoveryContinuous;
-    unlockState();
+    bool connected = client.connect(probeIp, probePort, SIGNALK_TCP_PROBE_TIMEOUT_MS);
 
+    // Update state based on result
     if (connected)
     {
         client.stop();
-    }
-
-    if (signalkServerReachable != previousState)
-    {
-        if (signalkServerReachable)
+        if (!previousReachable)
         {
             LOG_INFF("SignalK TCP OK: %s", target.c_str());
             addMonitorEvent("SK", "TCP probe OK " + target);
         }
-        else
+        setSignalKState(SK_REACHABLE);
+        signalkServerReachable = true;  // Legacy compatibility
+    }
+    else
+    {
+        if (previousReachable)
         {
             LOG_ERRF("SignalK TCP probe failed: %s", target.c_str());
             addMonitorEvent("ERR", "SignalK TCP probe failed " + target);
         }
-    }
-
-    if (!signalkServerReachable && !discoveryPending)
-    {
-        lockState();
-        if (previousState || signalkHadSuccessfulProbe)
-            signalkDiscoveryContinuous = true;
-        signalkDiscoveryPending = true;
-        signalkDiscoveryAttempts = 0;
-        lastDiscoveryAttempt = 0;
-        unlockState();
-        LOG_INF("SignalK unreachable - restarting discovery");
-        addMonitorEvent("SK", "Probe failed, rediscovery started");
+        setSignalKState(SK_UNREACHABLE);
+        signalkServerReachable = false;  // Legacy compatibility
+        
+        // Trigger rediscovery if we had a working connection before
+        if (signalkCtx.hadSuccessfulProbe && signalkCtx.state == SK_UNREACHABLE)
+        {
+            signalkCtx.continuousDiscovery = true;
+            setSignalKState(SK_DISCOVERING);
+            LOG_INF("SignalK unreachable - restarting discovery");
+            addMonitorEvent("SK", "Probe failed, rediscovery started");
+        }
     }
 }
 
