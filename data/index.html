@@ -114,28 +114,28 @@
         <div class="mini-pill err" id="skPill" title="Signal K. Toca para cambiar la IP"><span id="skText">SK</span></div>
         <div class="conn" id="connectionPill"><span class="dot" id="statusDot"></span><span id="statusText">Connecting…</span></div>
         <div class="wifi-pill off" id="wifiPill" title="RSSI WiFi ESP32"><div class="wifi-bars" aria-hidden="true"><span></span><span></span><span></span><span></span></div><span class="wifi-value" id="wifiValue">--</span></div>
-        <button class="icon-btn" onclick="window.location='/config'" aria-label="Configuración">⚙</button>
+        <button class="icon-btn" onclick="window.location='/config'" aria-label="Config" title="Config">⚙</button>
       </div>
     </header>
 
     <section class="hero">
       <div class="hero-head">
         <div class="hero-copy">
-          <small>Vista principal</small>
-          <h1 id="heroHeadline">Sistema en espera</h1>
+          <small>Main dashboard</small>
+          <h1 id="heroHeadline">System idle</h1>
         </div>
         <div class="system-pill" id="heroStatus">Offline</div>
       </div>
       <div class="hero-grid">
         <div class="metric">
-          <div class="metric-label">Tiempo parcial</div>
+          <div class="metric-label">Partial runtime</div>
           <div class="metric-value" id="partialTime">00:00:00</div>
-          <div class="metric-sub" id="partialSub">Equipo detenido</div>
+          <div class="metric-sub" id="partialSub">System stopped</div>
         </div>
         <div class="metric">
-          <div class="metric-label">Tiempo total</div>
+          <div class="metric-label">Total runtime</div>
           <div class="metric-value" id="totalTime">0.0 h</div>
-          <div class="metric-sub" id="totalSub">Acumulado guardado en el equipo</div>
+          <div class="metric-sub" id="totalSub">Accumulated on device</div>
         </div>
       </div>
     </section>
@@ -143,9 +143,9 @@
     <section class="pressure-card" id="lowCard">
       <div class="card-head">
         <div class="card-title-wrap">
-          <div class="card-title">Presión de entrada</div>
+          <div class="card-title">Feed pressure</div>
         </div>
-        <div class="zone-chip zone-neutral" id="lowZone">Espera</div>
+        <div class="zone-chip zone-neutral" id="lowZone">Idle</div>
       </div>
       <div class="pressure-row">
         <div class="pressure-value"><span id="valueLow">--</span><span class="unit">bar</span></div>
@@ -162,15 +162,15 @@
         <div class="track-zones" id="lowZones"></div>
         <div class="tick-row"><span id="lowTickMin">0</span><span id="lowTickMid">0</span><span id="lowTickMax">0</span></div>
       </div>
-      <div class="meta-strip"><span class="status-line">Estado: <strong id="lowState">--</strong></span></div>
+      <div class="meta-strip"><span class="status-line">Status: <strong id="lowState">--</strong></span></div>
     </section>
 
     <section class="pressure-card" id="highCard">
       <div class="card-head">
         <div class="card-title-wrap">
-          <div class="card-title">Presión principal</div>
+          <div class="card-title">Main pressure</div>
         </div>
-        <div class="zone-chip zone-neutral" id="highZone">Espera</div>
+        <div class="zone-chip zone-neutral" id="highZone">Idle</div>
       </div>
       <div class="pressure-row">
         <div class="pressure-value"><span id="valueHigh">--</span><span class="unit">bar</span></div>
@@ -187,10 +187,10 @@
         <div class="track-zones" id="highZones"></div>
         <div class="tick-row"><span id="highTickMin">0</span><span id="highTickMid">0</span><span id="highTickMax">0</span></div>
       </div>
-      <div class="meta-strip"><span class="status-line">Estado: <strong id="highState">--</strong></span></div>
+      <div class="meta-strip"><span class="status-line">Status: <strong id="highState">--</strong></span></div>
     </section>
 
-    <div class="footer-note"><span><strong id="footerHeadline">Última lectura</strong></span><span id="footerDetail">--:--:--</span></div>
+    <div class="footer-note"><span><strong id="footerHeadline">Last reading</strong></span><span id="footerDetail">--:--:--</span></div>
 
     <!-- Hidden config sources: preserve existing limits and highlights -->
     <canvas class="hidden-config" id="gaugeLow" data-min-value="0" data-max-value="4" data-highlights='[{"from":0,"to":1,"color":"rgba(255,165,0,.5)"},{"from":1,"to":3,"color":"rgba(0,128,0,.5)"},{"from":3,"to":4,"color":"rgba(255,0,0,.5)"}]'></canvas>
@@ -363,7 +363,7 @@
       if (currentRSSI === null) {
         pill.classList.add('off');
         valueEl.textContent = '--';
-        document.getElementById('totalSub').textContent = 'Acumulado guardado en el equipo';
+        document.getElementById('totalSub').textContent = 'Accumulated on device';
         return;
       }
       var level = 1;
@@ -372,7 +372,7 @@
       else if (currentRSSI >= -75) level = 2;
       pill.classList.add('level-' + level);
       valueEl.textContent = Math.round(currentRSSI) + ' dBm';
-      document.getElementById('totalSub').textContent = 'Acumulado guardado en el equipo';
+      document.getElementById('totalSub').textContent = 'Accumulated on device';
     }
 
     function updateSignalKPill() {
@@ -382,7 +382,7 @@
     }
 
     function promptSignalKIp() {
-      var nextIp = window.prompt('SignalK IP (usa 0.0.0.0 para redescubrir)', currentSignalkIp || '0.0.0.0');
+      var nextIp = window.prompt('SignalK IP (use 0.0.0.0 to rediscover)', currentSignalkIp || '0.0.0.0');
       if (nextIp === null) return;
       nextIp = nextIp.trim();
       if (!nextIp) nextIp = '0.0.0.0';
@@ -398,10 +398,10 @@
             updateSignalKPill();
             showError('SignalK IP: ' + currentSignalkIp);
           } catch (e) {
-            showError('No se pudo actualizar la IP de SignalK');
+            showError('Could not update SignalK IP');
           }
         } else {
-          showError('IP de SignalK invalida');
+          showError('Invalid SignalK IP');
         }
       };
       xhr.open('GET', '/set-signalk?ip=' + encodeURIComponent(nextIp), true);
@@ -506,22 +506,22 @@
       var parts = [];
       parts.push('FW: ' + currentFirmwareVersion);
       parts.push('UI: ' + UI_VERSION);
-      parts.push('SignalK: ' + ((currentSignalkIp !== '0.0.0.0' && currentSignalkAlive) ? 'activo' : 'sin respuesta'));
-      if (currentDeviceError) parts.push('Equipo: ' + currentDeviceError);
-      else if (isConnected) parts.push('Equipo sin errores detectados');
-      else parts.push('Sin datos validos del equipo');
+      parts.push('SignalK: ' + ((currentSignalkIp !== '0.0.0.0' && currentSignalkAlive) ? 'active' : 'no response'));
+      if (currentDeviceError) parts.push('Device: ' + currentDeviceError);
+      else if (isConnected) parts.push('No device errors detected');
+      else parts.push('No valid device data');
       showError(parts.join(' | '));
     }
 
     function updateLastUpdateTime() {
       if (!lastValidReadingTime) {
         document.getElementById('footerDetail').textContent = '--:--:--';
-        document.getElementById('partialSub').textContent = 'Última lectura --:--:--';
+        document.getElementById('partialSub').textContent = 'Last reading --:--:--';
         return;
       }
       var timeString = new Date(lastValidReadingTime).toLocaleTimeString();
-      document.getElementById('footerDetail').textContent = 'Última lectura ' + timeString;
-      document.getElementById('partialSub').textContent = 'Última lectura ' + timeString;
+      document.getElementById('footerDetail').textContent = 'Last reading ' + timeString;
+      document.getElementById('partialSub').textContent = 'Last reading ' + timeString;
     }
 
     function updateRuntimeState(data) {
@@ -534,7 +534,7 @@
     function updateRuntimeUI() {
       document.getElementById('partialTime').textContent = formatDuration(runtime.partialMs);
       document.getElementById('totalTime').textContent = formatHours(runtime.totalMs);
-      document.getElementById('partialSub').textContent = runtime.running ? 'Equipo en marcha' : 'Equipo detenido';
+      document.getElementById('partialSub').textContent = runtime.running ? 'System running' : 'System stopped';
       updateLastUpdateTime();
     }
 
@@ -565,11 +565,11 @@
     }
 
     function classifyZone(zone) {
-      if (!zone || !zone.color) return { label:'Sin rango', state:'Espera', className:'zone-neutral' };
+      if (!zone || !zone.color) return { label:'No range', state:'Idle', className:'zone-neutral' };
       var color = zone.color.toLowerCase();
-      if (color.indexOf('0,128,0') !== -1 || color.indexOf('34,197,94') !== -1) return { label:'Normal', state:'Estable', className:'zone-ok' };
-      if (color.indexOf('255,0,0') !== -1 || color.indexOf('239,68,68') !== -1) return { label:'Alarma', state:'Alta', className:'zone-danger' };
-      return { label:'Aviso', state:'Atención', className:'zone-warn' };
+      if (color.indexOf('0,128,0') !== -1 || color.indexOf('34,197,94') !== -1) return { label:'Normal', state:'Stable', className:'zone-ok' };
+      if (color.indexOf('255,0,0') !== -1 || color.indexOf('239,68,68') !== -1) return { label:'Alarm', state:'High', className:'zone-danger' };
+      return { label:'Warning', state:'Caution', className:'zone-warn' };
     }
 
     function updateHero(lowValue, highValue) {
@@ -577,16 +577,16 @@
       var heroStatus = document.getElementById('heroStatus');
       var highClass = classifyZone(locateZone(gauges.high.highlights, clamp(highValue, gauges.high.min, gauges.high.max)));
       var statusText = 'Offline';
-      var headline = 'Esperando presión';
+      var headline = 'Waiting for pressure';
 
       if (isConnected) {
         statusText = 'Online';
         if (!hasValidReading) {
-          headline = 'Esperando presión';
+          headline = 'Waiting for pressure';
         } else if (runtime.running) {
-          headline = highClass.label === 'Alarma' ? 'Alta presión fuera de rango' : 'Sistema activo';
+          headline = highClass.label === 'Alarm' ? 'High pressure out of range' : 'System active';
         } else {
-          headline = 'Sistema en espera';
+          headline = 'System idle';
         }
       }
 
@@ -635,7 +635,7 @@
             currentDeviceError = '';
             currentFirmwareVersion = '--';
             updateConnectionStatus();
-            showError('Error leyendo /pressure');
+            showError('Error reading /pressure');
           }
         } else {
           isConnected = false;
@@ -643,7 +643,7 @@
           currentDeviceError = '';
           currentFirmwareVersion = '--';
           updateConnectionStatus();
-          showError('Fallo HTTP ' + this.status + ' al leer /pressure');
+          showError('HTTP failure ' + this.status + ' while reading /pressure');
         }
       };
       xhr.onerror = function() {
@@ -652,7 +652,7 @@
         currentDeviceError = '';
         currentFirmwareVersion = '--';
         updateConnectionStatus();
-        showError('Error de red con el ESP8266');
+        showError('Network error with the ESP32');
       };
       try {
         xhr.open('GET', '/pressure', true);
@@ -663,7 +663,7 @@
         currentDeviceError = '';
         currentFirmwareVersion = '--';
         updateConnectionStatus();
-        showError('No se pudo enviar la petición');
+        showError('Could not send request');
       }
     }
 

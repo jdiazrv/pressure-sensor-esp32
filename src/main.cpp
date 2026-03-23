@@ -2,6 +2,17 @@
 // Based on Chain Counter ESP32 mejorado v3.7
 // Dual pressure sensor with SignalK integration
 // Changelog:
+//   v1.2
+//     Add: password-only auth on config, OTA and factory reset routes
+//     Add: dedicated admin credentials separated from AP password
+//     Add: lightweight admin session cookie for protected routes
+//     Add: shared-state mutex for sensor/network/runtime snapshots
+//     Add: I2C bus hardening with 100 kHz clock and timeout
+//     Add: password confirmation and reveal toggles on device settings
+//     Change: /config now opens a public settings menu and /device-settings stays protected
+//     Change: device settings page focuses on settings only, without maintenance shortcuts
+//     Change: dashboard and admin UI text unified in English
+//     Change: runtime NVS checkpoint relaxed to 15 min to reduce flash wear
 //   v1.1
 //     Fix: Sensor 2 factory max pressure corrected to 80 bar
 //     Fix: SignalK UDP mapping corrected to low/high semantic paths
@@ -38,7 +49,7 @@
 #include "config_html.h"
 
 // ── Versión del software ───────────────────────────────────────────────────────
-#define SW_VERSION "v1.1"
+#define SW_VERSION "v1.2"
 
 // ── Nivel de debug ──────────────────────────────────────────────────────────────
 // 0 = sin logs
@@ -99,6 +110,8 @@
 #define MAX_PRESSURE2 80
 #define MAX_AP_PASSWORD_LENGTH 20
 #define AP_PASSWORD "12345678"
+#define ADMIN_USERNAME "admin"
+#define ADMIN_PASSWORD "12345678"
 #define WIFI_MODE 1
 #define SENSOR_MODE_REAL 0
 #define SENSOR_MODE_DEMO 1
@@ -110,12 +123,17 @@
 #define SIGNALK_TCP_PROBE_TIMEOUT_MS 500
 #define RUNTIME_START_LOW_PRESSURE_BAR 1.0f
 #define RUNTIME_STOP_HIGH_PRESSURE_BAR 10.0f
-#define RUNTIME_CHECKPOINT_MS 300000UL
+#define RUNTIME_CHECKPOINT_MS 900000UL
 #define SENSOR_DISCONNECT_TOLERANCE_V 0.2f
 #define SENSOR_NO_SIGNAL_V 0.05f
 #define MONITOR_BUFFER_SIZE 160
-#define DISPLAY_REFRESH_MS 250
+#define SENSOR_REFRESH_MS 250
+#define DISPLAY_REFRESH_MS 1000
+#define DISPLAY_PAGE_MS 5000
 #define NETWORK_TASK_DELAY_MS 25
+#define I2C_CLOCK_HZ 100000UL
+#define I2C_TIMEOUT_MS 50
+#define AUTH_SESSION_TTL_MS 1800000UL
 
 // ── OLED ────────────────────────────────────────────────────────────────────────
 #define SCREEN_WIDTH 64
@@ -129,6 +147,7 @@ bool displayAvailable = false;
 
 // ── Variables globales ──────────────────────────────────────────────────────────
 Preferences prefs;
+SemaphoreHandle_t stateMutex = nullptr;
 
 // Sensor configuration
 float minVoltage1 = MIN_VOLTAGE1;
@@ -197,6 +216,10 @@ uint64_t totalRuntimeMs = 0;
 uint64_t runtimePersistedMs = 0;
 unsigned long runtimeStartMs = 0;
 bool runtimeRunning = false;
+bool runtimeActivePersisted = false;
+String adminPassword = ADMIN_PASSWORD;
+String adminSessionToken = "";
+unsigned long adminSessionExpiresMs = 0;
 
 // ADS1115
 Adafruit_ADS1115 ads;
@@ -234,6 +257,7 @@ struct DeviceSettingsPayload
     unsigned int outPort;
     String signalkIp;
     String apPassword;
+    String adminPassword;
     uint64_t totalRuntimeMs;
 };
 
@@ -245,13 +269,195 @@ bool readSettingsFromJson(DeviceSettingsPayload &payload, String &errorMessage);
 void Event_ApiSettingsGet();
 void Event_ApiSettingsPost();
 void writePreferences();
+void writeRuntimePreferences();
 uint64_t currentPartialRuntimeMs();
 uint64_t currentTotalRuntimeMs();
 void updateRuntimeTracking();
+bool ensureAuthenticated();
+void handleAuthLogin();
+bool hasAdminSession();
+String makeSessionToken();
+void sendPasswordPrompt();
+void lockState();
+void unlockState();
+
+struct SharedStateSnapshot
+{
+    float pressure1;
+    float pressure2;
+    float voltage1;
+    float voltage2;
+    IPAddress signalkIp;
+    unsigned int udpPort;
+    unsigned int signalkServicePort;
+    bool adsFound;
+    bool signalkAlive;
+    bool runtimeRunning;
+    bool runtimeActivePersisted;
+    bool tryingToConnect;
+    int wifiModeApSta;
+    int sensorMode;
+    int signalkMaxAttempts;
+    String lastDeviceError;
+};
+
+void captureSharedState(SharedStateSnapshot &snapshot);
 
 bool isValidIP(const IPAddress &ip)
 {
     return ip != IPAddress((uint32_t)0);
+}
+
+void lockState()
+{
+    if (stateMutex)
+        xSemaphoreTake(stateMutex, portMAX_DELAY);
+}
+
+void unlockState()
+{
+    if (stateMutex)
+        xSemaphoreGive(stateMutex);
+}
+
+void captureSharedState(SharedStateSnapshot &snapshot)
+{
+    lockState();
+    snapshot.pressure1 = pressure1;
+    snapshot.pressure2 = pressure2;
+    snapshot.voltage1 = voltage1;
+    snapshot.voltage2 = voltage2;
+    snapshot.signalkIp = ip1;
+    snapshot.udpPort = outPort;
+    snapshot.signalkServicePort = signalkServicePort;
+    snapshot.adsFound = Ads1115Found;
+    snapshot.signalkAlive = signalkServerReachable;
+    snapshot.runtimeRunning = runtimeRunning;
+    snapshot.runtimeActivePersisted = runtimeActivePersisted;
+    snapshot.tryingToConnect = tryingToConnect;
+    snapshot.wifiModeApSta = wifiModeApSta;
+    snapshot.sensorMode = sensorMode;
+    snapshot.signalkMaxAttempts = signalkMaxAttempts;
+    snapshot.lastDeviceError = lastDeviceError;
+    unlockState();
+}
+
+bool ensureAuthenticated()
+{
+    if (hasAdminSession())
+        return true;
+    sendPasswordPrompt();
+    return false;
+}
+
+bool hasAdminSession()
+{
+    if (adminSessionToken.length() == 0)
+        return false;
+
+    unsigned long now = millis();
+    if ((long)(now - adminSessionExpiresMs) >= 0)
+    {
+        adminSessionToken = "";
+        adminSessionExpiresMs = 0;
+        return false;
+    }
+
+    if (!server.hasHeader("Cookie"))
+        return false;
+
+    String cookie = server.header("Cookie");
+    String expected = "wm_admin_session=" + adminSessionToken;
+    return cookie.indexOf(expected) >= 0;
+}
+
+String makeSessionToken()
+{
+    uint32_t a = esp_random();
+    uint32_t b = esp_random();
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%08lx%08lx", (unsigned long)a, (unsigned long)b);
+    return String(buf);
+}
+
+void sendPasswordPrompt()
+{
+    String nextPath = server.uri();
+    if (nextPath.length() == 0)
+        nextPath = "/";
+
+    String html;
+    html.reserve(1200);
+    html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+           "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+           "<title>Admin Access</title>"
+           "<style>"
+           "body{margin:0;font-family:Arial,sans-serif;background:linear-gradient(180deg,#0d1a2e 0%,#08111d 100%);color:#fff;"
+           "display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px;box-sizing:border-box;}"
+           ".card{width:min(100%,360px);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);"
+           "border-radius:18px;padding:24px;box-shadow:0 8px 24px rgba(0,0,0,0.25);}"
+           "h2{margin:0 0 10px 0;}p{color:#b9c2d0;line-height:1.4;margin:0 0 16px 0;}"
+           "input{width:100%;box-sizing:border-box;border:none;border-radius:12px;min-height:48px;padding:0 14px;font-size:16px;margin-bottom:14px;}"
+           "button{appearance:none;border:none;border-radius:12px;min-height:48px;padding:0 16px;width:100%;"
+           "background:linear-gradient(180deg,#2f7df6,#1459c7);color:#fff;font-size:16px;font-weight:bold;cursor:pointer;}"
+           ".cancel{display:block;margin-top:12px;text-align:center;color:#b9c2d0;text-decoration:none;font-size:15px;}"
+           ".hint{margin-top:12px;font-size:13px;color:#8fa3bb;}"
+           "</style></head><body><div class='card'>"
+           "<h2>Admin access</h2>"
+           "<p>Enter the admin password to continue.</p>"
+           "<form method='POST' action='/auth/login'>"
+           "<input type='hidden' name='next' value='" + jsonEscape(nextPath) + "'>"
+           "<input type='password' name='password' placeholder='Password' autocomplete='current-password' autofocus>"
+           "<button type='submit'>Continue</button>"
+           "</form>"
+           "<a class='cancel' href='/'>Cancel and return to telemetry</a>"
+           "<div class='hint'>Admin user: " ADMIN_USERNAME "</div>"
+           "</div></body></html>";
+
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(401, "text/html", html);
+}
+
+void handleAuthLogin()
+{
+    String password = server.arg("password");
+    String nextPath = server.arg("next");
+    if (nextPath.length() == 0)
+        nextPath = "/device-settings";
+
+    if (password != adminPassword)
+    {
+        server.sendHeader("Cache-Control", "no-store");
+        server.send(403, "text/html",
+                    "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+                    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                    "<style>"
+                    "body{margin:0;font-family:Arial,sans-serif;background:#0d1a2e;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px;box-sizing:border-box;}"
+                    ".card{width:min(100%,360px);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);border-radius:18px;padding:24px;box-shadow:0 8px 24px rgba(0,0,0,0.25);}"
+                    "h2{margin:0 0 10px 0;}p{color:#ffb4b4;line-height:1.4;margin:0 0 16px 0;}"
+                    "input{width:100%;box-sizing:border-box;border:none;border-radius:12px;min-height:48px;padding:0 14px;font-size:16px;margin-bottom:14px;}"
+                    "button{appearance:none;border:none;border-radius:12px;min-height:48px;padding:0 16px;width:100%;background:linear-gradient(180deg,#2f7df6,#1459c7);color:#fff;font-size:16px;font-weight:bold;cursor:pointer;}"
+                    ".cancel{display:block;margin-top:12px;text-align:center;color:#b9c2d0;text-decoration:none;font-size:15px;}"
+                    "</style></head><body><div class='card'>"
+                    "<h2>Invalid password</h2>"
+                    "<p>The admin password you entered is not correct.</p>"
+                    "<form method='POST' action='/auth/login'>"
+                    "<input type='hidden' name='next' value='" + jsonEscape(nextPath) + "'>"
+                    "<input type='password' name='password' placeholder='Password' autocomplete='current-password' autofocus>"
+                    "<button type='submit'>Try again</button>"
+                    "</form>"
+                    "<a class='cancel' href='/'>Cancel and return to telemetry</a>"
+                    "</div></body></html>");
+        return;
+    }
+
+    adminSessionToken = makeSessionToken();
+    adminSessionExpiresMs = millis() + AUTH_SESSION_TTL_MS;
+    server.sendHeader("Set-Cookie",
+                      "wm_admin_session=" + adminSessionToken + "; Max-Age=1800; Path=/; HttpOnly; SameSite=Lax");
+    server.sendHeader("Cache-Control", "no-store");
+    server.sendHeader("Location", nextPath, true);
+    server.send(302, "text/plain", "");
 }
 
 String jsonEscape(const String &input)
@@ -325,19 +531,24 @@ bool canProduceReadings()
 
 bool shouldSendUdpData()
 {
-    if (WiFi.status() != WL_CONNECTED || wifiModeApSta != 1) return false;
-    if (!isValidIP(ip1)) return false;
-    if (!signalkServerReachable) return false;
-    if (sensorMode == SENSOR_MODE_DEMO_UDP) return true;
-    return sensorMode == SENSOR_MODE_REAL && Ads1115Found;
+    SharedStateSnapshot snapshot;
+    captureSharedState(snapshot);
+    if (WiFi.status() != WL_CONNECTED || snapshot.wifiModeApSta != 1) return false;
+    if (!isValidIP(snapshot.signalkIp)) return false;
+    if (!snapshot.signalkAlive) return false;
+    if (snapshot.sensorMode == SENSOR_MODE_DEMO_UDP) return true;
+    return snapshot.sensorMode == SENSOR_MODE_REAL && snapshot.adsFound;
 }
 
 bool isSystemRunning()
 {
-    bool dataValid = canProduceReadings() && lastDeviceError.length() == 0;
+    SharedStateSnapshot snapshot;
+    captureSharedState(snapshot);
+    bool dataValid = canProduceReadings() && snapshot.lastDeviceError.length() == 0;
     if (!dataValid) return false;
-    if (runtimeRunning) return pressure2 > RUNTIME_STOP_HIGH_PRESSURE_BAR;
-    return pressure1 >= RUNTIME_START_LOW_PRESSURE_BAR;
+    if (snapshot.runtimeRunning) return snapshot.pressure2 > RUNTIME_STOP_HIGH_PRESSURE_BAR;
+    if (snapshot.runtimeActivePersisted) return snapshot.pressure2 > RUNTIME_STOP_HIGH_PRESSURE_BAR;
+    return snapshot.pressure1 >= RUNTIME_START_LOW_PRESSURE_BAR;
 }
 
 uint64_t currentPartialRuntimeMs()
@@ -358,37 +569,56 @@ void updateRuntimeTracking()
 
     if (nowRunning && !runtimeRunning)
     {
+        lockState();
         runtimeRunning = true;
         runtimeStartMs = nowMs;
+        runtimeActivePersisted = true;
+        unlockState();
+        writeRuntimePreferences();
+    }
+    else if (!nowRunning && !runtimeRunning && runtimeActivePersisted)
+    {
+        lockState();
+        runtimeActivePersisted = false;
+        unlockState();
+        writeRuntimePreferences();
     }
     else if (!nowRunning && runtimeRunning)
     {
+        lockState();
         totalRuntimeMs += (uint64_t)(nowMs - runtimeStartMs);
         runtimeRunning = false;
         runtimeStartMs = 0;
-        writePreferences();
+        runtimeActivePersisted = false;
+        unlockState();
+        writeRuntimePreferences();
         runtimePersistedMs = totalRuntimeMs;
     }
 
     uint64_t currentTotal = currentTotalRuntimeMs();
     if (runtimeRunning && currentTotal >= runtimePersistedMs + (uint64_t)RUNTIME_CHECKPOINT_MS)
     {
+        lockState();
         totalRuntimeMs = currentTotal;
         runtimeStartMs = nowMs;
-        writePreferences();
+        runtimeActivePersisted = true;
+        unlockState();
+        writeRuntimePreferences();
         runtimePersistedMs = totalRuntimeMs;
     }
 }
 
 void probeSignalKServer(bool force)
 {
+    SharedStateSnapshot snapshot;
+    captureSharedState(snapshot);
     if (wifiModeApSta != 1 || WiFi.status() != WL_CONNECTED)
     {
         signalkServerReachable = false;
         return;
     }
 
-    if (!isValidIP(ip1))
+    if (!isValidIP(snapshot.signalkIp))
     {
         signalkServerReachable = false;
         return;
@@ -400,17 +630,19 @@ void probeSignalKServer(bool force)
 
     lastSignalkProbeMs = now;
 
-    bool previousState = signalkServerReachable;
-    String target = ip1.toString() + ":" + String(signalkServicePort);
+    bool previousState = snapshot.signalkAlive;
+    String target = snapshot.signalkIp.toString() + ":" + String(snapshot.signalkServicePort);
     WiFiClient client;
     client.setTimeout(1);
-    bool connected = client.connect(ip1, signalkServicePort, SIGNALK_TCP_PROBE_TIMEOUT_MS);
+    bool connected = client.connect(snapshot.signalkIp, snapshot.signalkServicePort, SIGNALK_TCP_PROBE_TIMEOUT_MS);
+    lockState();
     signalkServerReachable = connected;
     if (connected)
     {
         signalkHadSuccessfulProbe = true;
         client.stop();
     }
+    unlockState();
 
     if (signalkServerReachable != previousState)
     {
@@ -510,9 +742,10 @@ bool configIsValid()
 
     bool wifiModeOk = (wifiModeApSta == 0 || wifiModeApSta == 1);
     bool sensorModeOk = (sensorMode >= SENSOR_MODE_REAL && sensorMode <= SENSOR_MODE_DEMO_UDP);
-    bool apPasswordOk = APpassword.length() < MAX_AP_PASSWORD_LENGTH;
+    bool apPasswordOk = APpassword.length() >= 8 && APpassword.length() < MAX_AP_PASSWORD_LENGTH;
+    bool adminPasswordOk = adminPassword.length() >= 8 && adminPassword.length() < MAX_AP_PASSWORD_LENGTH;
 
-    return voltagesOk && pressuresOk && wifiModeOk && sensorModeOk && apPasswordOk;
+    return voltagesOk && pressuresOk && wifiModeOk && sensorModeOk && apPasswordOk && adminPasswordOk;
 }
 
 // ── OLED helpers ────────────────────────────────────────────────────────────────
@@ -535,22 +768,55 @@ void drawScreen()
         display.print(Ads1115Found ? "ADS OK" : "NO ADS");
     display.drawLine(0, 9, SCREEN_WIDTH - 1, 9, WHITE);
 
-    display.setTextSize(2);
-    display.setCursor(0, 12);
-    display.print(String(pressure1, 1));
-    display.setTextSize(1);
-    display.setCursor(52, 16);
-    display.print("b1");
+    bool showNetworkPage = ((millis() / DISPLAY_PAGE_MS) % 2UL) == 1UL;
 
-    display.setTextSize(2);
-    display.setCursor(0, 32);
-    display.print(String(pressure2, 1));
-    display.setTextSize(1);
-    display.setCursor(52, 36);
-    display.print("b2");
+    if (showNetworkPage)
+    {
+        display.setTextSize(1);
+        display.setCursor(0, 14);
+        display.print("NET");
+
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            String localIp = WiFi.localIP().toString();
+            int splitAt = localIp.lastIndexOf('.', 9);
+            if (splitAt < 0) splitAt = min((int)localIp.length(), 10);
+
+            display.setCursor(0, 24);
+            display.print(localIp.substring(0, splitAt));
+            display.setCursor(0, 36);
+            if (splitAt < (int)localIp.length())
+                display.print(localIp.substring(splitAt + 1));
+            else
+                display.print("OK");
+        }
+        else
+        {
+            display.setCursor(0, 24);
+            display.print("Connecting");
+            display.setCursor(0, 36);
+            display.print("AP active");
+        }
+    }
+    else
+    {
+        display.setTextSize(2);
+        display.setCursor(0, 12);
+        display.print(String(pressure1, 1));
+        display.setTextSize(1);
+        display.setCursor(52, 16);
+        display.print("b1");
+
+        display.setTextSize(2);
+        display.setCursor(0, 32);
+        display.print(String(pressure2, 1));
+        display.setTextSize(1);
+        display.setCursor(52, 36);
+        display.print("b2");
+    }
 
     display.display();
-    LOG_VRBF("OLED: P1=%.1f P2=%.1f", pressure1, pressure2);
+    LOG_VRBF("OLED: %s", showNetworkPage ? "NET" : "PRESSURE");
 }
 
 void drawErrorScreen(const char *errorMessage)
@@ -602,12 +868,21 @@ void writePreferences()
     prefs.putInt("wifiMode", wifiModeApSta);
     prefs.putInt("sensorMode", sensorMode);
     prefs.putString("apPassword", APpassword);
+    prefs.putString("adminPassword", adminPassword);
     prefs.putUInt("signalkIp", (uint32_t)ip1);
     prefs.putUInt("outPort", outPort);
     prefs.putInt("signalkMaxAttempts", signalkMaxAttempts);
-    prefs.putULong64("totalRuntimeMs", totalRuntimeMs);
     prefs.end();
     LOG_INF("NVS saved");
+}
+
+void writeRuntimePreferences()
+{
+    prefs.begin("config", false);
+    prefs.putULong64("totalRuntimeMs", totalRuntimeMs);
+    prefs.putBool("runtimeActive", runtimeActivePersisted);
+    prefs.end();
+    LOG_INF("Runtime NVS saved");
 }
 
 void readPreferences()
@@ -633,10 +908,12 @@ void readPreferences()
         prefs.putInt("wifiMode", WIFI_MODE);
         prefs.putInt("sensorMode", SENSOR_MODE_REAL);
         prefs.putString("apPassword", AP_PASSWORD);
+        prefs.putString("adminPassword", ADMIN_PASSWORD);
         prefs.putUInt("signalkIp", 0);
         prefs.putUInt("outPort", DEFAULT_UDP_PORT);
         prefs.putInt("signalkMaxAttempts", DEFAULT_SIGNALK_MAX_ATTEMPTS);
         prefs.putULong64("totalRuntimeMs", 0);
+        prefs.putBool("runtimeActive", false);
     }
     
     minVoltage1 = prefs.getFloat("minV1", MIN_VOLTAGE1);
@@ -650,10 +927,12 @@ void readPreferences()
     wifiModeApSta = prefs.getInt("wifiMode", WIFI_MODE);
     sensorMode = prefs.getInt("sensorMode", SENSOR_MODE_REAL);
     APpassword = prefs.getString("apPassword", AP_PASSWORD);
+    adminPassword = prefs.getString("adminPassword", ADMIN_PASSWORD);
     outPort = prefs.getUInt("outPort", DEFAULT_UDP_PORT);
     signalkMaxAttempts = prefs.getInt("signalkMaxAttempts", DEFAULT_SIGNALK_MAX_ATTEMPTS);
     totalRuntimeMs = prefs.getULong64("totalRuntimeMs", 0);
     runtimePersistedMs = totalRuntimeMs;
+    runtimeActivePersisted = prefs.getBool("runtimeActive", false);
     
     {
         uint32_t savedIp = prefs.getUInt("signalkIp", 0);
@@ -679,9 +958,12 @@ void readPreferences()
         wifiModeApSta = WIFI_MODE;
         sensorMode = SENSOR_MODE_REAL;
         APpassword = AP_PASSWORD;
+        adminPassword = ADMIN_PASSWORD;
         totalRuntimeMs = 0;
         runtimePersistedMs = 0;
+        runtimeActivePersisted = false;
         writePreferences();
+        writeRuntimePreferences();
     }
 }
 
@@ -696,14 +978,14 @@ void trySignalKDiscovery()
     if (!signalkDiscoveryContinuous && signalkMaxAttempts > 0 && signalkDiscoveryAttempts >= signalkMaxAttempts)
     {
         signalkDiscoveryPending = false;
-        LOG_INFF("SignalK discovery: abandonado tras %d intentos", signalkDiscoveryAttempts);
+        LOG_INFF("SignalK discovery: stopped after %d attempts", signalkDiscoveryAttempts);
         addMonitorEvent("SK", "Discovery stopped after " + String(signalkDiscoveryAttempts) + " attempts");
         return;
     }
 
     lastDiscoveryAttempt = millis();
     signalkDiscoveryAttempts++;
-    LOG_INFF("SignalK discovery intento %d/%d...", signalkDiscoveryAttempts, signalkMaxAttempts);
+    LOG_INFF("SignalK discovery attempt %d/%d...", signalkDiscoveryAttempts, signalkMaxAttempts);
 
     int n = MDNS.queryService("signalk-ws", "tcp");
     if (n > 0)
@@ -728,7 +1010,7 @@ void trySignalKDiscovery()
                 LOG_INFF("Resolving with .local: %s", hostLocal.c_str());
                 if (!WiFi.hostByName(hostLocal.c_str(), resolved) || !isValidIP(resolved))
                 {
-                    LOG_ERR("SignalK: no se pudo resolver hostname ni obtener IP valida");
+                    LOG_ERR("SignalK: could not resolve hostname or obtain a valid IP");
                     addMonitorEvent("ERR", "SignalK hostname resolve failed for " + signalkHost);
                     return;
                 }
@@ -737,7 +1019,7 @@ void trySignalKDiscovery()
 
         if (!isValidIP(resolved))
         {
-            LOG_ERR("SignalK: mDNS devolvio 0.0.0.0");
+            LOG_ERR("SignalK: mDNS returned 0.0.0.0");
             addMonitorEvent("ERR", "SignalK mDNS returned 0.0.0.0");
             return;
         }
@@ -753,7 +1035,7 @@ void trySignalKDiscovery()
         prefs.putUInt("signalkIp", (uint32_t)ip1);
         prefs.end();
 
-        LOG_INFF("SignalK encontrado: %s (service port %d, UDP port %d)",
+        LOG_INFF("SignalK found: %s (service port %d, UDP port %d)",
                  ip1.toString().c_str(), signalkPort, outPort);
         addMonitorEvent("SK", "Discovered " + ip1.toString() + " service=" + String(signalkPort) +
                               " udp=" + String(outPort));
@@ -788,7 +1070,7 @@ void trySignalKDiscovery()
     }
     else
     {
-        LOG_INFF("SignalK no encontrado (%d/%d)", signalkDiscoveryAttempts, signalkMaxAttempts);
+        LOG_INFF("SignalK not found (%d/%d)", signalkDiscoveryAttempts, signalkMaxAttempts);
         addMonitorEvent("SK", "Discovery attempt " + String(signalkDiscoveryAttempts) + " no match");
     }
 }
@@ -796,27 +1078,29 @@ void trySignalKDiscovery()
 void sendUDP()
 {
     if (!shouldSendUdpData()) return;
-    
+    SharedStateSnapshot snapshot;
+    captureSharedState(snapshot);
+
     char udpmessage[256];
     sprintf(udpmessage,
             "{\"updates\":[{\"$source\":\"ESP32.watermaker\","
             "\"values\":[{\"path\":\"environment.watermaker.pressure.high\","
             "\"value\":%.3f},{\"path\":\"environment.watermaker.pressure.low\","
             "\"value\":%.3f}]}]}",
-            pressure2, pressure1);
-    Udp.beginPacket(ip1, outPort);
+            snapshot.pressure2, snapshot.pressure1);
+    Udp.beginPacket(snapshot.signalkIp, snapshot.udpPort);
     Udp.write((const uint8_t *)udpmessage, strlen(udpmessage));
     int udpResult = Udp.endPacket();
     if (udpResult == 1)
     {
-        LOG_VRBF("UDP sent: HP=%.2f LP=%.2f", pressure2, pressure1);
-        addMonitorEvent("UDP", "Send OK " + ip1.toString() + ":" + String(outPort) +
-                               " hp=" + String(pressure2, 2) + " lp=" + String(pressure1, 2));
+        LOG_VRBF("UDP sent: HP=%.2f LP=%.2f", snapshot.pressure2, snapshot.pressure1);
+        addMonitorEvent("UDP", "Send OK " + snapshot.signalkIp.toString() + ":" + String(snapshot.udpPort) +
+                               " hp=" + String(snapshot.pressure2, 2) + " lp=" + String(snapshot.pressure1, 2));
     }
     else
     {
         LOG_ERRF("UDP send failed: result=%d", udpResult);
-        addMonitorEvent("ERR", "UDP send failed " + ip1.toString() + ":" + String(outPort));
+        addMonitorEvent("ERR", "UDP send failed " + snapshot.signalkIp.toString() + ":" + String(snapshot.udpPort));
     }
 }
 
@@ -909,7 +1193,9 @@ void updatePressureReadings()
 
         pressure1 = mapToPressure(voltage1, minVoltage1, maxVoltage1, minPressure1, maxPressure1);
         pressure2 = mapToPressure(voltage2, minVoltage2, maxVoltage2, minPressure2, maxPressure2);
+        lockState();
         lastSensorUpdateMs = millis();
+        unlockState();
     }
     else
     {
@@ -1002,17 +1288,19 @@ static void handleOtaUpload()
 
 void Event_pressure()
 {
+    SharedStateSnapshot snapshot;
+    captureSharedState(snapshot);
     String jsonResponse;
     int rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
-    bool dataValid = canProduceReadings() && lastDeviceError.length() == 0;
+    bool dataValid = canProduceReadings() && snapshot.lastDeviceError.length() == 0;
     bool systemRunning = isSystemRunning();
     bool udpAllowed = shouldSendUdpData();
     jsonResponse.reserve(256);
     jsonResponse = "{";
-    jsonResponse += "\"pressure1\":" + String(pressure1, 3) + ",";
-    jsonResponse += "\"pressure2\":" + String(pressure2, 3) + ",";
+    jsonResponse += "\"pressure1\":" + String(snapshot.pressure1, 3) + ",";
+    jsonResponse += "\"pressure2\":" + String(snapshot.pressure2, 3) + ",";
     jsonResponse += "\"rssi\":" + String(rssi) + ",";
-    jsonResponse += "\"adsFound\":" + String(Ads1115Found ? "true" : "false") + ",";
+    jsonResponse += "\"adsFound\":" + String(snapshot.adsFound ? "true" : "false") + ",";
     jsonResponse += "\"dataValid\":" + String(dataValid ? "true" : "false") + ",";
     jsonResponse += "\"systemRunning\":" + String(systemRunning ? "true" : "false") + ",";
     jsonResponse += "\"partialRuntimeMs\":" + String((unsigned long long)currentPartialRuntimeMs()) + ",";
@@ -1020,9 +1308,9 @@ void Event_pressure()
     jsonResponse += "\"udpEnabled\":" + String(udpAllowed ? "true" : "false") + ",";
     jsonResponse += "\"sensorMode\":\"" + String(sensorModeName(sensorMode)) + "\",";
     jsonResponse += "\"firmwareVersion\":\"" + String(SW_VERSION) + "\",";
-    jsonResponse += "\"signalkIp\":\"" + (isValidIP(ip1) ? ip1.toString() : String("0.0.0.0")) + "\",";
-    jsonResponse += "\"signalkAlive\":" + String(signalkServerReachable ? "true" : "false") + ",";
-    jsonResponse += "\"error\":\"" + lastDeviceError + "\"";
+    jsonResponse += "\"signalkIp\":\"" + (isValidIP(snapshot.signalkIp) ? snapshot.signalkIp.toString() : String("0.0.0.0")) + "\",";
+    jsonResponse += "\"signalkAlive\":" + String(snapshot.signalkAlive ? "true" : "false") + ",";
+    jsonResponse += "\"error\":\"" + snapshot.lastDeviceError + "\"";
     jsonResponse += "}";
     ledBlinkStart = millis();
     ledBlinkActive = true;
@@ -1037,9 +1325,11 @@ void Event_pressure()
 
 void Event_State()
 {
+    SharedStateSnapshot snapshot;
+    captureSharedState(snapshot);
     String json;
     int rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
-    bool dataValid = canProduceReadings() && lastDeviceError.length() == 0;
+    bool dataValid = canProduceReadings() && snapshot.lastDeviceError.length() == 0;
     bool systemRunning = isSystemRunning();
     bool udpAllowed = shouldSendUdpData();
 
@@ -1053,20 +1343,20 @@ void Event_State()
     json += "\"apIp\":\"" + WiFi.softAPIP().toString() + "\",";
     json += "\"rssi\":" + String(rssi) + ",";
     json += "\"sensorMode\":\"" + String(sensorModeName(sensorMode)) + "\",";
-    json += "\"adsFound\":" + String(Ads1115Found ? "true" : "false") + ",";
+    json += "\"adsFound\":" + String(snapshot.adsFound ? "true" : "false") + ",";
     json += "\"dataValid\":" + String(dataValid ? "true" : "false") + ",";
     json += "\"systemRunning\":" + String(systemRunning ? "true" : "false") + ",";
     json += "\"partialRuntimeMs\":" + String((unsigned long long)currentPartialRuntimeMs()) + ",";
     json += "\"totalRuntimeMs\":" + String((unsigned long long)currentTotalRuntimeMs()) + ",";
-    json += "\"deviceError\":\"" + jsonEscape(lastDeviceError) + "\",";
-    json += "\"pressure1\":" + String(pressure1, 3) + ",";
-    json += "\"pressure2\":" + String(pressure2, 3) + ",";
-    json += "\"voltage1\":" + String(voltage1, 3) + ",";
-    json += "\"voltage2\":" + String(voltage2, 3) + ",";
-    json += "\"signalkIp\":\"" + (isValidIP(ip1) ? ip1.toString() : String("0.0.0.0")) + "\",";
-    json += "\"signalkAlive\":" + String(signalkServerReachable ? "true" : "false") + ",";
-    json += "\"signalkServicePort\":" + String(signalkServicePort) + ",";
-    json += "\"udpPort\":" + String(outPort) + ",";
+    json += "\"deviceError\":\"" + jsonEscape(snapshot.lastDeviceError) + "\",";
+    json += "\"pressure1\":" + String(snapshot.pressure1, 3) + ",";
+    json += "\"pressure2\":" + String(snapshot.pressure2, 3) + ",";
+    json += "\"voltage1\":" + String(snapshot.voltage1, 3) + ",";
+    json += "\"voltage2\":" + String(snapshot.voltage2, 3) + ",";
+    json += "\"signalkIp\":\"" + (isValidIP(snapshot.signalkIp) ? snapshot.signalkIp.toString() : String("0.0.0.0")) + "\",";
+    json += "\"signalkAlive\":" + String(snapshot.signalkAlive ? "true" : "false") + ",";
+    json += "\"signalkServicePort\":" + String(snapshot.signalkServicePort) + ",";
+    json += "\"udpPort\":" + String(snapshot.udpPort) + ",";
     json += "\"udpEnabled\":" + String(udpAllowed ? "true" : "false") + ",";
     json += "\"uptimeMs\":" + String(millis());
     json += "}";
@@ -1121,6 +1411,7 @@ void Event_Submit()
         (unsigned int)server.arg("outPort").toInt(),
         server.arg("signalkIp"),
         server.arg("APpassword"),
+        server.arg("adminPassword"),
         totalRuntimeMs,
     };
 
@@ -1143,6 +1434,7 @@ void appendSettingsJson(String &json)
     json += "\"outPort\":" + String(outPort) + ",";
     json += "\"signalkIp\":\"" + (isValidIP(ip1) ? ip1.toString() : String("0.0.0.0")) + "\",";
     json += "\"APpassword\":\"" + jsonEscape(APpassword) + "\",";
+    json += "\"adminPassword\":\"" + jsonEscape(adminPassword) + "\",";
     json += "\"totalRuntimeMs\":" + String((unsigned long long)totalRuntimeMs);
 }
 
@@ -1194,6 +1486,26 @@ bool validateSettingsPayload(const DeviceSettingsPayload &payload, String &error
         errorMessage = "AP password too long";
         return false;
     }
+    if (payload.apPassword.length() > 0 && payload.apPassword.length() < 8)
+    {
+        errorMessage = "AP password too short";
+        return false;
+    }
+    if (payload.adminPassword.length() == 0)
+    {
+        errorMessage = "Admin password required";
+        return false;
+    }
+    if (payload.adminPassword.length() < 8)
+    {
+        errorMessage = "Admin password too short";
+        return false;
+    }
+    if (payload.adminPassword.length() > MAX_AP_PASSWORD_LENGTH)
+    {
+        errorMessage = "Admin password too long";
+        return false;
+    }
 
     String signalkIpStr = payload.signalkIp;
     signalkIpStr.trim();
@@ -1230,7 +1542,6 @@ bool applySettingsPayload(const DeviceSettingsPayload &payload, bool jsonRespons
         return false;
     }
 
-    IPAddress oldIp1 = ip1;
     int oldWifiMode = wifiModeApSta;
     int oldSensorMode = sensorMode;
 
@@ -1245,6 +1556,7 @@ bool applySettingsPayload(const DeviceSettingsPayload &payload, bool jsonRespons
 
     if (payload.apPassword.length() > 0)
         APpassword = payload.apPassword;
+    adminPassword = payload.adminPassword;
     wifiModeApSta = payload.wifiModeApSta;
     sensorMode = payload.sensorMode;
     signalkMaxAttempts = (payload.signalkMaxAttempts >= 0 && payload.signalkMaxAttempts <= 60) ? payload.signalkMaxAttempts : DEFAULT_SIGNALK_MAX_ATTEMPTS;
@@ -1252,12 +1564,14 @@ bool applySettingsPayload(const DeviceSettingsPayload &payload, bool jsonRespons
     ip1 = parsedIp;
     totalRuntimeMs = payload.totalRuntimeMs;
     runtimePersistedMs = totalRuntimeMs;
+    runtimeActivePersisted = runtimeRunning;
     signalkServicePort = 3000;
     signalkServerReachable = false;
     lastSignalkProbeMs = 0;
     updateDeviceError();
 
     writePreferences();
+    writeRuntimePreferences();
 
     if (ip1 == IPAddress(0, 0, 0, 0) && wifiModeApSta == 1 && WiFi.isConnected())
     {
@@ -1348,6 +1662,7 @@ bool readSettingsFromJson(DeviceSettingsPayload &payload, String &errorMessage)
     payload.outPort = doc["outPort"] | outPort;
     payload.signalkIp = String((const char *)(doc["signalkIp"] | (isValidIP(ip1) ? ip1.toString().c_str() : "0.0.0.0")));
     payload.apPassword = String((const char *)(doc["APpassword"] | APpassword.c_str()));
+    payload.adminPassword = String((const char *)(doc["adminPassword"] | adminPassword.c_str()));
     payload.totalRuntimeMs = doc["totalRuntimeMs"] | totalRuntimeMs;
     return true;
 }
@@ -1374,6 +1689,7 @@ void Event_ApiSettingsPost()
         outPort,
         isValidIP(ip1) ? ip1.toString() : String("0.0.0.0"),
         APpassword,
+        adminPassword,
         totalRuntimeMs,
     };
     String errorMessage;
@@ -1403,6 +1719,7 @@ void Event_Config()
     htmlContent.replace("{sensorMode1}", (sensorMode == SENSOR_MODE_DEMO) ? "selected" : "");
     htmlContent.replace("{sensorMode2}", (sensorMode == SENSOR_MODE_DEMO_UDP) ? "selected" : "");
     htmlContent.replace("{APpassword}", String(APpassword));
+    htmlContent.replace("{adminPassword}", String(adminPassword));
     htmlContent.replace("{signalkMaxAttempts}", String(signalkMaxAttempts));
     htmlContent.replace("{outPort}", String(outPort));
     htmlContent.replace("{signalkIp}", ip1.toString());
@@ -1498,7 +1815,7 @@ void Event_Tools()
     String html =
         "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<title>Tools</title>"
+        "<title>Settings</title>"
         "<style>"
         "body{margin:0;font-family:Arial,sans-serif;background:linear-gradient(180deg,#0d1a2e 0%,#08111d 100%);color:#fff;}"
         ".page{max-width:560px;margin:0 auto;padding:16px;}"
@@ -1507,14 +1824,19 @@ void Event_Tools()
         "button{appearance:none;border:none;border-radius:14px;min-height:56px;font-size:18px;font-weight:bold;color:#fff;cursor:pointer;width:100%;}"
         ".secondary{background:linear-gradient(180deg,#303846,#151b24);}"
         ".primary{background:linear-gradient(180deg,#2f7df6,#1459c7);}"
+        ".danger{background:linear-gradient(180deg,#8d2b2b,#5d1717);}"
         "p{color:#b9c2d0;line-height:1.4;}"
         "</style></head><body><div class='page'><div class='card'>"
-        "<h2>Tools</h2>"
-        "<p>Diagnostics and live monitor for this ESP32.</p>"
+        "<h2>Settings</h2>"
+        "<p>Diagnostics, maintenance and protected device settings for this ESP32.</p>"
         "<div class='actions'>"
         "<button class='secondary' onclick=\"window.location='/diagnostics'\">Device diagnostics</button>"
         "<button class='secondary' onclick=\"window.location='/monitor'\">SignalK monitor</button>"
-        "<button class='primary' onclick=\"window.location='/config'\">Back to settings</button>"
+        "<button class='primary' onclick=\"window.location='/device-settings'\">Device settings</button>"
+        "<button class='danger' onclick=\"if(confirm('Restore factory settings?')) window.location.href='/factory'\">Factory reset</button>"
+        "<button class='secondary' onclick=\"window.location='/update'\">Update firmware</button>"
+        "<button class='secondary' onclick=\"window.location='/updatefs'\">Update filesystem</button>"
+        "<button class='secondary' onclick=\"window.location='/'\">Back to telemetry</button>"
         "</div></div></div></body></html>";
     server.send(200, "text/html", html);
 }
@@ -1739,6 +2061,8 @@ void Event_Factory()
     prefs.begin("config", false);
     prefs.clear();
     prefs.end();
+    adminSessionToken = "";
+    adminSessionExpiresMs = 0;
 
     String html =
         "<!DOCTYPE html><html><head>"
@@ -1755,7 +2079,7 @@ void Event_Factory()
         "p{font-size:18px;} .small{font-size:14px;color:#aaa;}"
         "</style></head><body>"
         "<div class='card'>"
-        "<p><b>&#10003; Factory reset completado</b></p>"
+        "<p><b>&#10003; Factory reset completed</b></p>"
         "<p>Min Voltage 1: " + String(MIN_VOLTAGE1, 1) + " V</p>"
         "<p>Max Voltage 1: " + String(MAX_VOLTAGE1, 1) + " V</p>"
         "<p>Min Pressure 1: " + String(MIN_PRESSURE1) + " bar</p>"
@@ -1766,7 +2090,8 @@ void Event_Factory()
         "<p>Max Pressure 2: " + String(MAX_PRESSURE2) + " bar</p>"
         "<p>SignalK attempts: " + String(DEFAULT_SIGNALK_MAX_ATTEMPTS) + "</p>"
         "<p>UDP port: " + String(DEFAULT_UDP_PORT) + "</p>"
-        "<p class='small'>Reiniciando... redirigiendo en 6s</p>"
+        "<p>Admin password: " + String(ADMIN_PASSWORD) + "</p>"
+        "<p class='small'>Rebooting... redirecting in 6s</p>"
         "</div></body></html>";
 
     server.send(200, "text/html", html);
@@ -1793,16 +2118,19 @@ void setup()
     digitalWrite(LED_PIN, HIGH);
 
     // Read preferences
+    stateMutex = xSemaphoreCreateMutex();
     readPreferences();
 
     // Init I2C before probing any device on the bus
     Wire.begin(OLED_SDA, OLED_SCL);
+    Wire.setClock(I2C_CLOCK_HZ);
+    Wire.setTimeOut(I2C_TIMEOUT_MS);
 
     // Init ADS1115
-    LOG_INF("Inicializando ADS1115...");
+    LOG_INF("Initializing ADS1115...");
     if (!ads.begin())
     {
-        LOG_ERR("ADS1115 no encontrado. Verifique la conexión.");
+        LOG_ERR("ADS1115 not found. Check the connection.");
         Ads1115Found = false;
         pressure1 = 0.0f;
         pressure2 = 0.0f;
@@ -1810,7 +2138,7 @@ void setup()
     }
     else
     {
-        LOG_INF("ADS1115 encontrado.");
+        LOG_INF("ADS1115 found.");
         Ads1115Found = true;
         addMonitorEvent("SYS", "ADS1115 detected");
     }
@@ -1860,7 +2188,7 @@ void setup()
         
         if (!MDNS.begin(hostName))
         {
-            LOG_ERR("Error al iniciar mDNS");
+            LOG_ERR("Error starting mDNS");
         }
         else
         {
@@ -1904,12 +2232,27 @@ void setup()
     }
 
     // HTTP routes
+    const char *headerKeys[] = {"Cookie"};
+    server.collectHeaders(headerKeys, 1);
     server.on("/", Event_Index);
+    server.on("/auth/login", HTTP_POST, handleAuthLogin);
     server.on("/manifest.webmanifest", HTTP_GET, Event_manifest);
     server.on("/icon.svg", HTTP_GET, Event_icon);
-    server.on("/config", HTTP_GET, Event_Config);
-    server.on("/submit", HTTP_POST, Event_Submit);
-    server.on("/submit", HTTP_GET, Event_Submit);
+    server.on("/config", HTTP_GET, []()
+              {
+                Event_Tools(); });
+    server.on("/device-settings", HTTP_GET, []()
+              {
+                if (!ensureAuthenticated()) return;
+                Event_Config(); });
+    server.on("/submit", HTTP_POST, []()
+              {
+                if (!ensureAuthenticated()) return;
+                Event_Submit(); });
+    server.on("/submit", HTTP_GET, []()
+              {
+                if (!ensureAuthenticated()) return;
+                Event_Submit(); });
     server.on("/pressure", HTTP_GET, []()
               {
                 server.sendHeader("Access-Control-Allow-Origin", "*");
@@ -1925,6 +2268,7 @@ void setup()
     server.on("/api/settings", HTTP_POST, []()
               {
                 server.sendHeader("Access-Control-Allow-Origin", "*");
+                if (!ensureAuthenticated()) return;
                 Event_ApiSettingsPost(); });
     server.on("/meta", HTTP_GET, []()
               {
@@ -1941,7 +2285,10 @@ void setup()
                 server.sendHeader("Cache-Control", "no-cache");
                 server.send(200, "text/plain",
                     (ip1!=IPAddress(0,0,0,0)) ? ip1.toString() : "0.0.0.0"); });
-    server.on("/set-signalk", HTTP_GET, Event_SetSignalKIp);
+    server.on("/set-signalk", HTTP_GET, []()
+              {
+                if (!ensureAuthenticated()) return;
+                Event_SetSignalKIp(); });
     server.on("/wifi.txt", []()
               {
                 server.sendHeader("Cache-Control", "no-cache");
@@ -1954,6 +2301,7 @@ void setup()
     // OTA update pages
     server.on("/update", HTTP_GET, []()
               {
+        if (!ensureAuthenticated()) return;
         server.send(200, "text/html",
             "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -1973,6 +2321,7 @@ void setup()
             "</form></div></body></html>"); });
     server.on("/updatefs", HTTP_GET, []()
               {
+        if (!ensureAuthenticated()) return;
         server.send(200, "text/html",
             "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -1993,6 +2342,7 @@ void setup()
     server.on("/update", HTTP_POST,
         []()
         {
+            if (!ensureAuthenticated()) return;
             if (Update.hasError())
                 server.send(200, "text/html",
                     "<h2 style='color:red'>Update FAILED: " + otaError + "</h2>");
@@ -2008,6 +2358,7 @@ void setup()
         },
         []()
         {
+            if (!ensureAuthenticated()) return;
             otaCommand = U_FLASH;
             otaLabel = "firmware";
             handleOtaUpload();
@@ -2015,6 +2366,7 @@ void setup()
     server.on("/updatefs", HTTP_POST,
         []()
         {
+            if (!ensureAuthenticated()) return;
             if (Update.hasError())
                 server.send(200, "text/html",
                     "<h2 style='color:red'>Filesystem update FAILED: " + otaError + "</h2>");
@@ -2030,6 +2382,7 @@ void setup()
         },
         []()
         {
+            if (!ensureAuthenticated()) return;
             otaCommand = U_SPIFFS;
             otaLabel = "filesystem";
             handleOtaUpload();
@@ -2058,6 +2411,7 @@ void setup()
 
 void loop()
 {
+    static unsigned long lastSensorRefreshMs = 0;
     static unsigned long lastDisplayRefreshMs = 0;
 
     bool otaNow = Update.isRunning();
@@ -2095,8 +2449,14 @@ void loop()
         return;
     }
 
-    // Read sensors
-    updatePressureReadings();
+    // Read sensors at 4 Hz. Pressure changes slowly enough that this keeps
+    // the UI responsive while reducing unnecessary ADC/I2C work in the loop.
+    if (millis() - lastSensorRefreshMs >= SENSOR_REFRESH_MS)
+    {
+        lastSensorRefreshMs = millis();
+        updatePressureReadings();
+    }
+
     updateRuntimeTracking();
     if (canProduceReadings() && millis() - lastDisplayRefreshMs >= DISPLAY_REFRESH_MS)
     {

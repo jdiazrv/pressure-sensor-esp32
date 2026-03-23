@@ -163,6 +163,29 @@ const char *configPageHTML = R"rawliteral(
             align-items: end;
         }
 
+        .password-row {
+            display: grid;
+            grid-template-columns: 1fr 92px;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .password-toggle {
+            min-height: 48px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: linear-gradient(180deg,#303846,#151b24);
+            color: #fff;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .password-toggle:disabled {
+            opacity: 0.6;
+            cursor: default;
+        }
+
         .critical {
             border: 1px solid rgba(255,120,120,0.25);
             background: rgba(192,57,43,0.08);
@@ -186,6 +209,22 @@ const char *configPageHTML = R"rawliteral(
             color: var(--muted);
             line-height: 1.35;
             margin-top: 6px;
+        }
+
+        .form-error {
+            display: none;
+            margin-bottom: 14px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,120,120,0.28);
+            background: rgba(192,57,43,0.12);
+            color: #ffb3b3;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .form-error.visible {
+            display: block;
         }
 
         .actions {
@@ -245,7 +284,8 @@ const char *configPageHTML = R"rawliteral(
         <title>Pressure Sensor Settings</title>
     </div>
 
-    <form action="/submit" method="post">
+    <form action="/submit" method="post" onsubmit="return validatePasswords()">
+        <div id="formError" class="form-error"></div>
 
         <!-- ── Sensor 1 ──────────────────────────────────────────── -->
         <div class="section">
@@ -331,9 +371,43 @@ const char *configPageHTML = R"rawliteral(
 
             <div class="input-container">
                 <label for="APpassword" id="apPassLabel">AP password</label>
-                <input type="password" id="APpassword" name="APpassword"
-                       value="{APpassword}" minlength="8" maxlength="19">
+                <div class="password-row">
+                    <input type="password" id="APpassword" name="APpassword"
+                           value="{APpassword}" minlength="8" maxlength="19">
+                    <button type="button" class="password-toggle"
+                            onclick="togglePasswordVisibility('APpassword', this)">Show</button>
+                </div>
             </div>
+            <div class="input-container">
+                <label for="APpasswordConfirm">Confirm AP password</label>
+                <div class="password-row">
+                    <input type="password" id="APpasswordConfirm"
+                           value="{APpassword}" minlength="8" maxlength="19">
+                    <button type="button" class="password-toggle"
+                            onclick="togglePasswordVisibility('APpasswordConfirm', this)">Show</button>
+                </div>
+            </div>
+            <div class="input-container">
+                <label for="adminPassword">Admin password</label>
+                <div class="password-row">
+                    <input type="password" id="adminPassword" name="adminPassword"
+                           value="{adminPassword}" minlength="8" maxlength="19">
+                    <button type="button" class="password-toggle"
+                            onclick="togglePasswordVisibility('adminPassword', this)">Show</button>
+                </div>
+            </div>
+            <div class="input-container">
+                <label for="adminPasswordConfirm">Confirm admin password</label>
+                <div class="password-row">
+                    <input type="password" id="adminPasswordConfirm"
+                           value="{adminPassword}" minlength="8" maxlength="19">
+                    <button type="button" class="password-toggle"
+                            onclick="togglePasswordVisibility('adminPasswordConfirm', this)">Show</button>
+                </div>
+            </div>
+            <p class="helper" style="margin-top:-6px;">
+                Used for settings, OTA and factory reset. Factory reset restores it to 12345678.
+            </p>
 
             <div class="input-container">
                 <label for="signalkMaxAttempts" id="skAttLabel">SignalK discovery attempts (0 = unlimited)</label>
@@ -364,39 +438,8 @@ const char *configPageHTML = R"rawliteral(
             </p>
         </div>
 
-        <!-- ── Maintenance ───────────────────────────────────── -->
-        <div class="section">
-            <h3>Maintenance</h3>
-
-            <div class="system-actions">
-                <button type="button" class="secondary-btn"
-                        onclick="window.open('/update','_blank')">
-                    Update firmware (OTA)
-                </button>
-
-                <button type="button" class="secondary-btn"
-                        onclick="window.open('/updatefs','_blank')">
-                    Update filesystem
-                </button>
-
-                <button type="button" class="secondary-btn"
-                        onclick="window.location='/tools'">
-                    Tools
-                </button>
-
-                <button type="button" class="danger-btn"
-                        onclick="if(confirm('Restore factory settings?')) window.location.href='/factory'">
-                    Factory reset
-                </button>
-            </div>
-
-            <div class="helper">
-                Use factory reset only if you want to restore the original defaults.
-            </div>
-        </div>
-
         <div class="actions">
-            <button type="button" class="secondary-btn" onclick="window.location='/'">Back</button>
+            <button type="button" class="secondary-btn" onclick="window.location='/config'">Back</button>
             <button type="submit" class="primary-btn">Save settings</button>
         </div>
 
@@ -404,8 +447,55 @@ const char *configPageHTML = R"rawliteral(
 </div>
 
 <script>
+    function setFormError(message) {
+        var box = document.getElementById('formError');
+        if (!box) return;
+        if (message) {
+            box.textContent = message;
+            box.classList.add('visible');
+        } else {
+            box.textContent = '';
+            box.classList.remove('visible');
+        }
+    }
+
+    function validatePasswords() {
+        var ap = document.getElementById('APpassword');
+        var apConfirm = document.getElementById('APpasswordConfirm');
+        var admin = document.getElementById('adminPassword');
+        var adminConfirm = document.getElementById('adminPasswordConfirm');
+
+        setFormError('');
+
+        if (ap.value !== apConfirm.value) {
+            setFormError('Cannot save: AP password and confirmation do not match.');
+            apConfirm.focus();
+            apConfirm.select();
+            return false;
+        }
+
+        if (admin.value !== adminConfirm.value) {
+            setFormError('Cannot save: admin password and confirmation do not match.');
+            adminConfirm.focus();
+            adminConfirm.select();
+            return false;
+        }
+
+        return true;
+    }
+
+    function togglePasswordVisibility(inputId, button) {
+        var input = document.getElementById(inputId);
+        if (!input || !button) return;
+
+        var showing = (input.type === 'text');
+        input.type = showing ? 'password' : 'text';
+        button.textContent = showing ? 'Show' : 'Hide';
+    }
+
     function toggleAPPassword(select) {
         var inp     = document.getElementById('APpassword');
+        var inp2    = document.getElementById('APpasswordConfirm');
         var lbl     = document.getElementById('apPassLabel');
         var skInp   = document.getElementById('signalkMaxAttempts');
         var skLbl   = document.getElementById('skAttLabel');
@@ -415,10 +505,11 @@ const char *configPageHTML = R"rawliteral(
         var ipLbl   = document.getElementById('signalkIpLabel');
         var isAP    = (select.value === '0');
 
-        // AP password: only editable in AP mode
-        inp.disabled = !isAP;
-        lbl.classList.toggle('label-disabled', !isAP);
-        lbl.classList.toggle('label-enabled',   isAP);
+        // AP password: editable in both modes
+        inp.disabled = false;
+        inp2.disabled = false;
+        lbl.classList.remove('label-disabled');
+        lbl.classList.add('label-enabled');
 
         // SignalK fields: only active in Client mode
         skInp.disabled  = isAP;
@@ -431,6 +522,10 @@ const char *configPageHTML = R"rawliteral(
 
     window.onload = function() {
         toggleAPPassword(document.getElementById('modo'));
+        document.getElementById('APpassword').addEventListener('input', function() { setFormError(''); });
+        document.getElementById('APpasswordConfirm').addEventListener('input', function() { setFormError(''); });
+        document.getElementById('adminPassword').addEventListener('input', function() { setFormError(''); });
+        document.getElementById('adminPasswordConfirm').addEventListener('input', function() { setFormError(''); });
     };
 </script>
 
