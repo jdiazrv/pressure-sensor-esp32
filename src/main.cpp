@@ -1826,7 +1826,7 @@ void logSensorData()
     if (DEBUG >= 2 && millis() - lastVoltageLogMs >= 2000)
     {
         lastVoltageLogMs = millis();
-        LOG_VRBF("Sensor voltages: V1=%.3fV V2=%.3fV", loggedVoltage1, loggedVoltage2);
+        LOG_INFF("Sensor voltages: V1=%.3fV V2=%.3fV", loggedVoltage1, loggedVoltage2);
     }
 
     if (shouldLogDeviceError)

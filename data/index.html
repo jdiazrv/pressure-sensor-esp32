@@ -379,10 +379,13 @@
       var pill = document.getElementById('skPill');
       pill.classList.remove('ok', 'err');
       pill.classList.add((currentSignalkIp !== '0.0.0.0' && currentSignalkAlive) ? 'ok' : 'err');
+      pill.title = (currentSignalkIp !== '0.0.0.0')
+        ? ('SignalK diagnostics IP: ' + currentSignalkIp + (currentSignalkAlive ? ' (reachable)' : ' (no response)'))
+        : 'SignalK diagnostics IP not set';
     }
 
     function promptSignalKIp() {
-      var nextIp = window.prompt('SignalK IP (use 0.0.0.0 to rediscover)', currentSignalkIp || '0.0.0.0');
+      var nextIp = window.prompt('SignalK diagnostic IP (use 0.0.0.0 to rediscover)', currentSignalkIp || '0.0.0.0');
       if (nextIp === null) return;
       nextIp = nextIp.trim();
       if (!nextIp) nextIp = '0.0.0.0';
@@ -396,7 +399,7 @@
             currentSignalkIp = data && data.ip ? data.ip : '0.0.0.0';
             currentSignalkAlive = false;
             updateSignalKPill();
-            showError('SignalK IP: ' + currentSignalkIp);
+            showError('SignalK diagnostic IP: ' + currentSignalkIp);
           } catch (e) {
             showError('Could not update SignalK IP');
           }
@@ -506,7 +509,8 @@
       var parts = [];
       parts.push('FW: ' + currentFirmwareVersion);
       parts.push('UI: ' + UI_VERSION);
-      parts.push('SignalK: ' + ((currentSignalkIp !== '0.0.0.0' && currentSignalkAlive) ? 'active' : 'no response'));
+      parts.push('UDP broadcast: ' + (isConnected ? 'active' : 'offline'));
+      parts.push('SignalK diagnostics: ' + ((currentSignalkIp !== '0.0.0.0' && currentSignalkAlive) ? 'reachable' : 'no response'));
       if (currentDeviceError) parts.push('Device: ' + currentDeviceError);
       else if (isConnected) parts.push('No device errors detected');
       else parts.push('No valid device data');

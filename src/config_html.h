@@ -366,7 +366,7 @@ const char *configPageHTML = R"rawliteral(
                 </select>
             </div>
             <p class="helper" style="margin-top:-6px;">
-                Real only sends UDP when ADS1115 is detected. Demo + UDP keeps the same pipeline and transmits simulated values.
+                Real sends UDP when ADS1115 data is valid. Demo and Demo + UDP keep the telemetry pipeline alive with simulated values.
             </p>
 
             <div class="input-container">
@@ -420,21 +420,21 @@ const char *configPageHTML = R"rawliteral(
             </p>
 
             <div class="input-container" style="margin-top:12px;">
-                <label for="outPort" id="outPortLabel">SignalK UDP port (1024-65535)</label>
+                <label for="outPort" id="outPortLabel">UDP broadcast port (1024-65535)</label>
                 <input type="number" id="outPort" name="outPort"
                        value="{outPort}" min="1024" max="65535">
             </div>
             <p class="helper" style="margin-top:-6px;">
-                Default: 4210. Only active in Client mode.
+                Default: 4210. The ESP32 broadcasts telemetry to the whole network on this port. Only active in Client mode.
             </p>
 
             <div class="input-container" style="margin-top:12px;">
-                <label for="signalkIp" id="signalkIpLabel">SignalK server IP</label>
+                <label for="signalkIp" id="signalkIpLabel">SignalK diagnostic IP</label>
                 <input type="text" id="signalkIp" name="signalkIp"
                        value="{signalkIp}" placeholder="0.0.0.0" maxlength="15">
             </div>
             <p class="helper" style="margin-top:-6px;">
-                Discovered automatically. Clear or set 0.0.0.0 to force rediscovery. Only active in Client mode.
+                Used for SignalK discovery and health checks only. UDP broadcast keeps working even if this server is offline. Clear or set 0.0.0.0 to force rediscovery.
             </p>
         </div>
 
