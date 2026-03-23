@@ -123,6 +123,8 @@
 #define SIGNALK_TCP_PROBE_TIMEOUT_MS 500
 #define RUNTIME_START_LOW_PRESSURE_BAR 1.0f
 #define RUNTIME_STOP_HIGH_PRESSURE_BAR 10.0f
+#define UDP_SEND_INTERVAL_MS 2000UL
+#define UDP_AVERAGE_WINDOW 5
 #define RUNTIME_CHECKPOINT_MS 900000UL
 #define SENSOR_DISCONNECT_TOLERANCE_V 0.2f
 #define SENSOR_NO_SIGNAL_V 0.05f
@@ -148,6 +150,7 @@ bool displayAvailable = false;
 // ── Variables globales ──────────────────────────────────────────────────────────
 Preferences prefs;
 SemaphoreHandle_t stateMutex = nullptr;
+SemaphoreHandle_t prefsMutex = nullptr;  // Mutex for NVS/Preferences operations
 
 // Sensor configuration
 float minVoltage1 = MIN_VOLTAGE1;
@@ -196,7 +199,6 @@ bool isFirstBoot = true;
 
 // Timing
 unsigned long previousMillis = 0;
-const long interval = 3000;
 unsigned long ledBlinkStart = 0;
 bool ledBlinkActive = false;
 unsigned long lastSensorUpdateMs = 0;
@@ -220,6 +222,12 @@ bool runtimeActivePersisted = false;
 String adminPassword = ADMIN_PASSWORD;
 String adminSessionToken = "";
 unsigned long adminSessionExpiresMs = 0;
+float udpPressure1History[UDP_AVERAGE_WINDOW] = {0};
+float udpPressure2History[UDP_AVERAGE_WINDOW] = {0};
+uint8_t udpPressureHistoryCount = 0;
+uint8_t udpPressureHistoryIndex = 0;
+float lastSentUdpPressure1 = NAN;
+float lastSentUdpPressure2 = NAN;
 
 // ADS1115
 Adafruit_ADS1115 ads;
@@ -299,9 +307,17 @@ struct SharedStateSnapshot
     int sensorMode;
     int signalkMaxAttempts;
     String lastDeviceError;
+    float udpAvgPressure1;
+    float udpAvgPressure2;
+    bool udpAverageReady;
 };
 
 void captureSharedState(SharedStateSnapshot &snapshot);
+void recordUdpPressureSample(float lowPressure, float highPressure);
+void resetUdpPressureHistory();
+bool shouldSendUdpUpdate(SharedStateSnapshot &snapshot, float &outLow, float &outHigh);
+void commitUdpSentValues(float low, float high);
+void sendUDP(const SharedStateSnapshot &snapshot);
 
 bool isValidIP(const IPAddress &ip)
 {
@@ -318,6 +334,37 @@ void unlockState()
 {
     if (stateMutex)
         xSemaphoreGive(stateMutex);
+}
+
+// Helper functions for 64-bit runtime variables (atomic access under lock)
+static uint64_t getTotalRuntimeMsLocked()
+{
+    return totalRuntimeMs;
+}
+
+static void setTotalRuntimeMsLocked(uint64_t value)
+{
+    totalRuntimeMs = value;
+}
+
+static uint64_t getRuntimePersistedMsLocked()
+{
+    return runtimePersistedMs;
+}
+
+static void setRuntimePersistedMsLocked(uint64_t value)
+{
+    runtimePersistedMs = value;
+}
+
+static unsigned long getRuntimeStartMsLocked()
+{
+    return runtimeStartMs;
+}
+
+static void setRuntimeStartMsLocked(unsigned long value)
+{
+    runtimeStartMs = value;
 }
 
 void captureSharedState(SharedStateSnapshot &snapshot)
@@ -339,6 +386,21 @@ void captureSharedState(SharedStateSnapshot &snapshot)
     snapshot.sensorMode = sensorMode;
     snapshot.signalkMaxAttempts = signalkMaxAttempts;
     snapshot.lastDeviceError = lastDeviceError;
+    snapshot.udpAvgPressure1 = 0.0f;
+    snapshot.udpAvgPressure2 = 0.0f;
+    snapshot.udpAverageReady = (udpPressureHistoryCount > 0);
+    if (udpPressureHistoryCount > 0)
+    {
+        float lowSum = 0.0f;
+        float highSum = 0.0f;
+        for (uint8_t i = 0; i < udpPressureHistoryCount; i++)
+        {
+            lowSum += udpPressure1History[i];
+            highSum += udpPressure2History[i];
+        }
+        snapshot.udpAvgPressure1 = lowSum / udpPressureHistoryCount;
+        snapshot.udpAvgPressure2 = highSum / udpPressureHistoryCount;
+    }
     unlockState();
 }
 
@@ -356,7 +418,7 @@ bool hasAdminSession()
         return false;
 
     unsigned long now = millis();
-    if ((long)(now - adminSessionExpiresMs) >= 0)
+    if (adminSessionExpiresMs != 0 && (long)(now - adminSessionExpiresMs) >= 0)
     {
         adminSessionToken = "";
         adminSessionExpiresMs = 0;
@@ -524,6 +586,13 @@ bool isDemoMode()
     return sensorMode == SENSOR_MODE_DEMO || sensorMode == SENSOR_MODE_DEMO_UDP;
 }
 
+bool snapshotCanProduceReadings(const SharedStateSnapshot &snapshot)
+{
+    return snapshot.sensorMode == SENSOR_MODE_DEMO ||
+           snapshot.sensorMode == SENSOR_MODE_DEMO_UDP ||
+           snapshot.adsFound;
+}
+
 bool canProduceReadings()
 {
     return isDemoMode() || Ads1115Found;
@@ -534,17 +603,70 @@ bool shouldSendUdpData()
     SharedStateSnapshot snapshot;
     captureSharedState(snapshot);
     if (WiFi.status() != WL_CONNECTED || snapshot.wifiModeApSta != 1) return false;
-    if (!isValidIP(snapshot.signalkIp)) return false;
-    if (!snapshot.signalkAlive) return false;
-    if (snapshot.sensorMode == SENSOR_MODE_DEMO_UDP) return true;
-    return snapshot.sensorMode == SENSOR_MODE_REAL && snapshot.adsFound;
+    if (!snapshotCanProduceReadings(snapshot)) return false;
+    return snapshot.lastDeviceError.length() == 0;
+}
+
+void recordUdpPressureSample(float lowPressure, float highPressure)
+{
+    lockState();
+    udpPressure1History[udpPressureHistoryIndex] = lowPressure;
+    udpPressure2History[udpPressureHistoryIndex] = highPressure;
+    udpPressureHistoryIndex = (udpPressureHistoryIndex + 1) % UDP_AVERAGE_WINDOW;
+    if (udpPressureHistoryCount < UDP_AVERAGE_WINDOW)
+        udpPressureHistoryCount++;
+    unlockState();
+}
+
+void resetUdpPressureHistory()
+{
+    lockState();
+    for (uint8_t i = 0; i < UDP_AVERAGE_WINDOW; i++)
+    {
+        udpPressure1History[i] = 0.0f;
+        udpPressure2History[i] = 0.0f;
+    }
+    udpPressureHistoryCount = 0;
+    udpPressureHistoryIndex = 0;
+    lastSentUdpPressure1 = NAN;
+    lastSentUdpPressure2 = NAN;
+    unlockState();
+}
+
+// Returns true if there is a change worth sending
+bool shouldSendUdpUpdate(SharedStateSnapshot &snapshot, float &outLow, float &outHigh)
+{
+    captureSharedState(snapshot);
+    if (!snapshot.udpAverageReady) return false;
+
+    float roundedLow = roundf(snapshot.udpAvgPressure1 * 10.0f) / 10.0f;
+    float roundedHigh = roundf(snapshot.udpAvgPressure2 * 10.0f) / 10.0f;
+
+    lockState();
+    bool changed = isnan(lastSentUdpPressure1) || isnan(lastSentUdpPressure2) ||
+                   roundedLow != lastSentUdpPressure1 || roundedHigh != lastSentUdpPressure2;
+    unlockState();
+
+    outLow = roundedLow;
+    outHigh = roundedHigh;
+    return changed;
+}
+
+// Called after successful UDP send to update the "last sent" state
+void commitUdpSentValues(float low, float high)
+{
+    lockState();
+    lastSentUdpPressure1 = low;
+    lastSentUdpPressure2 = high;
+    unlockState();
 }
 
 bool isSystemRunning()
 {
     SharedStateSnapshot snapshot;
     captureSharedState(snapshot);
-    bool dataValid = canProduceReadings() && snapshot.lastDeviceError.length() == 0;
+    // Use snapshot-based check instead of global read for consistency
+    bool dataValid = snapshotCanProduceReadings(snapshot) && snapshot.lastDeviceError.length() == 0;
     if (!dataValid) return false;
     if (snapshot.runtimeRunning) return snapshot.pressure2 > RUNTIME_STOP_HIGH_PRESSURE_BAR;
     if (snapshot.runtimeActivePersisted) return snapshot.pressure2 > RUNTIME_STOP_HIGH_PRESSURE_BAR;
@@ -553,13 +675,21 @@ bool isSystemRunning()
 
 uint64_t currentPartialRuntimeMs()
 {
-    if (!runtimeRunning) return 0;
-    return (uint64_t)(millis() - runtimeStartMs);
+    lockState();
+    bool running = runtimeRunning;
+    unsigned long startMs = runtimeStartMs;
+    unlockState();
+    
+    if (!running) return 0;
+    return (uint64_t)(millis() - startMs);
 }
 
 uint64_t currentTotalRuntimeMs()
 {
-    return totalRuntimeMs + currentPartialRuntimeMs();
+    lockState();
+    uint64_t total = totalRuntimeMs;
+    unlockState();
+    return total + currentPartialRuntimeMs();
 }
 
 void updateRuntimeTracking()
@@ -592,19 +722,26 @@ void updateRuntimeTracking()
         runtimeActivePersisted = false;
         unlockState();
         writeRuntimePreferences();
+        lockState();
         runtimePersistedMs = totalRuntimeMs;
+        unlockState();
     }
 
     uint64_t currentTotal = currentTotalRuntimeMs();
-    if (runtimeRunning && currentTotal >= runtimePersistedMs + (uint64_t)RUNTIME_CHECKPOINT_MS)
+    lockState();
+    uint64_t persisted = runtimePersistedMs;
+    bool running = runtimeRunning;
+    unlockState();
+    
+    if (running && currentTotal >= persisted + (uint64_t)RUNTIME_CHECKPOINT_MS)
     {
         lockState();
         totalRuntimeMs = currentTotal;
         runtimeStartMs = nowMs;
         runtimeActivePersisted = true;
+        runtimePersistedMs = totalRuntimeMs;
         unlockState();
         writeRuntimePreferences();
-        runtimePersistedMs = totalRuntimeMs;
     }
 }
 
@@ -612,37 +749,62 @@ void probeSignalKServer(bool force)
 {
     SharedStateSnapshot snapshot;
     captureSharedState(snapshot);
-    if (wifiModeApSta != 1 || WiFi.status() != WL_CONNECTED)
+    
+    // Read wifiMode under lock for consistency
+    lockState();
+    int currentWifiMode = wifiModeApSta;
+    unlockState();
+    
+    if (currentWifiMode != 1 || WiFi.status() != WL_CONNECTED)
     {
+        lockState();
         signalkServerReachable = false;
+        unlockState();
         return;
     }
 
     if (!isValidIP(snapshot.signalkIp))
     {
+        lockState();
         signalkServerReachable = false;
+        unlockState();
         return;
     }
 
     unsigned long now = millis();
-    if (!force && lastSignalkProbeMs != 0 && now - lastSignalkProbeMs < SIGNALK_PROBE_MS)
+    
+    lockState();
+    unsigned long lastProbe = lastSignalkProbeMs;
+    unlockState();
+    
+    if (!force && lastProbe != 0 && now - lastProbe < SIGNALK_PROBE_MS)
         return;
 
+    lockState();
     lastSignalkProbeMs = now;
+    unlockState();
 
     bool previousState = snapshot.signalkAlive;
     String target = snapshot.signalkIp.toString() + ":" + String(snapshot.signalkServicePort);
     WiFiClient client;
     client.setTimeout(1);
     bool connected = client.connect(snapshot.signalkIp, snapshot.signalkServicePort, SIGNALK_TCP_PROBE_TIMEOUT_MS);
+    
     lockState();
     signalkServerReachable = connected;
     if (connected)
     {
         signalkHadSuccessfulProbe = true;
+    }
+    bool discoveryPending = signalkDiscoveryPending;
+    bool hadSuccessfulProbe = signalkHadSuccessfulProbe;
+    bool discoveryContinuous = signalkDiscoveryContinuous;
+    unlockState();
+
+    if (connected)
+    {
         client.stop();
     }
-    unlockState();
 
     if (signalkServerReachable != previousState)
     {
@@ -658,13 +820,15 @@ void probeSignalKServer(bool force)
         }
     }
 
-    if (!signalkServerReachable && !signalkDiscoveryPending)
+    if (!signalkServerReachable && !discoveryPending)
     {
+        lockState();
         if (previousState || signalkHadSuccessfulProbe)
             signalkDiscoveryContinuous = true;
         signalkDiscoveryPending = true;
         signalkDiscoveryAttempts = 0;
         lastDiscoveryAttempt = 0;
+        unlockState();
         LOG_INF("SignalK unreachable - restarting discovery");
         addMonitorEvent("SK", "Probe failed, rediscovery started");
     }
@@ -672,62 +836,64 @@ void probeSignalKServer(bool force)
 
 void updateDeviceError()
 {
+    String newError;
+    
     if (sensorMode == SENSOR_MODE_REAL && !Ads1115Found)
     {
-        lastDeviceError = "ADS1115 not found";
-        return;
+        newError = "ADS1115 not found";
     }
-
-    if (isDemoMode())
+    else if (isDemoMode())
     {
-        lastDeviceError = "";
-        return;
+        newError = "";
     }
-
-    if (voltage1 <= SENSOR_NO_SIGNAL_V && voltage2 <= SENSOR_NO_SIGNAL_V)
+    else
     {
-        lastDeviceError = "No signal from pressure sensors";
-        return;
+        // Read sensor state under lock
+        lockState();
+        float v1 = voltage1;
+        float v2 = voltage2;
+        unsigned long lastUpdate = lastSensorUpdateMs;
+        unlockState();
+        
+        if (v1 <= SENSOR_NO_SIGNAL_V && v2 <= SENSOR_NO_SIGNAL_V)
+        {
+            newError = "No signal from pressure sensors";
+        }
+        else if (v1 <= SENSOR_NO_SIGNAL_V)
+        {
+            newError = "No signal from pressure sensor 1";
+        }
+        else if (v2 <= SENSOR_NO_SIGNAL_V)
+        {
+            newError = "No signal from pressure sensor 2";
+        }
+        else if (v1 < (minVoltage1 - SENSOR_DISCONNECT_TOLERANCE_V) &&
+                 v2 < (minVoltage2 - SENSOR_DISCONNECT_TOLERANCE_V))
+        {
+            newError = "Pressure sensors disconnected";
+        }
+        else if (v1 < (minVoltage1 - SENSOR_DISCONNECT_TOLERANCE_V))
+        {
+            newError = "Pressure sensor 1 disconnected";
+        }
+        else if (v2 < (minVoltage2 - SENSOR_DISCONNECT_TOLERANCE_V))
+        {
+            newError = "Pressure sensor 2 disconnected";
+        }
+        else if (lastUpdate == 0 || millis() - lastUpdate > 5000)
+        {
+            newError = "No fresh sensor data";
+        }
+        else
+        {
+            newError = "";
+        }
     }
-
-    if (voltage1 <= SENSOR_NO_SIGNAL_V)
-    {
-        lastDeviceError = "No signal from pressure sensor 1";
-        return;
-    }
-
-    if (voltage2 <= SENSOR_NO_SIGNAL_V)
-    {
-        lastDeviceError = "No signal from pressure sensor 2";
-        return;
-    }
-
-    if (voltage1 < (minVoltage1 - SENSOR_DISCONNECT_TOLERANCE_V) &&
-        voltage2 < (minVoltage2 - SENSOR_DISCONNECT_TOLERANCE_V))
-    {
-        lastDeviceError = "Pressure sensors disconnected";
-        return;
-    }
-
-    if (voltage1 < (minVoltage1 - SENSOR_DISCONNECT_TOLERANCE_V))
-    {
-        lastDeviceError = "Pressure sensor 1 disconnected";
-        return;
-    }
-
-    if (voltage2 < (minVoltage2 - SENSOR_DISCONNECT_TOLERANCE_V))
-    {
-        lastDeviceError = "Pressure sensor 2 disconnected";
-        return;
-    }
-
-    if (lastSensorUpdateMs == 0 || millis() - lastSensorUpdateMs > 5000)
-    {
-        lastDeviceError = "No fresh sensor data";
-        return;
-    }
-
-    lastDeviceError = "";
+    
+    // Update error under lock (it's a String, so we want atomic write)
+    lockState();
+    lastDeviceError = newError;
+    unlockState();
 }
 
 bool configIsValid()
@@ -856,6 +1022,10 @@ void writePreferences()
         return;
     }
 
+    // Take prefsMutex to ensure exclusive NVS access
+    if (prefsMutex)
+        xSemaphoreTake(prefsMutex, portMAX_DELAY);
+    
     prefs.begin("config", false);
     prefs.putFloat("minV1", minVoltage1);
     prefs.putFloat("maxV1", maxVoltage1);
@@ -873,22 +1043,45 @@ void writePreferences()
     prefs.putUInt("outPort", outPort);
     prefs.putInt("signalkMaxAttempts", signalkMaxAttempts);
     prefs.end();
+    
+    if (prefsMutex)
+        xSemaphoreGive(prefsMutex);
+    
     LOG_INF("NVS saved");
 }
 
 void writeRuntimePreferences()
 {
+    lockState();
+    uint64_t runtimeToSave = totalRuntimeMs;
+    bool runtimeActiveToSave = runtimeActivePersisted;
+    unlockState();
+
+    // Take prefsMutex to ensure exclusive NVS access
+    if (prefsMutex)
+        xSemaphoreTake(prefsMutex, portMAX_DELAY);
+    
     prefs.begin("config", false);
-    prefs.putULong64("totalRuntimeMs", totalRuntimeMs);
-    prefs.putBool("runtimeActive", runtimeActivePersisted);
+    prefs.putULong64("totalRuntimeMs", runtimeToSave);
+    prefs.putBool("runtimeActive", runtimeActiveToSave);
     prefs.end();
+    
+    if (prefsMutex)
+        xSemaphoreGive(prefsMutex);
+    
     LOG_INF("Runtime NVS saved");
 }
 
 void readPreferences()
 {
-    prefs.begin("config", true);
+    // Note: This is called in setup() before prefsMutex exists
+    // Use prefsMutex if available (runtime re-reads), otherwise proceed without it
+    bool useMutex = (prefsMutex != nullptr);
+    if (useMutex)
+        xSemaphoreTake(prefsMutex, portMAX_DELAY);
     
+    prefs.begin("config", true);
+
     // Check if first run
     bool tpInit = prefs.isKey("nvsInit");
     if (!tpInit)
@@ -915,7 +1108,7 @@ void readPreferences()
         prefs.putULong64("totalRuntimeMs", 0);
         prefs.putBool("runtimeActive", false);
     }
-    
+
     minVoltage1 = prefs.getFloat("minV1", MIN_VOLTAGE1);
     maxVoltage1 = prefs.getFloat("maxV1", MAX_VOLTAGE1);
     minPressure1 = prefs.getFloat("minP1", MIN_PRESSURE1);
@@ -933,7 +1126,7 @@ void readPreferences()
     totalRuntimeMs = prefs.getULong64("totalRuntimeMs", 0);
     runtimePersistedMs = totalRuntimeMs;
     runtimeActivePersisted = prefs.getBool("runtimeActive", false);
-    
+
     {
         uint32_t savedIp = prefs.getUInt("signalkIp", 0);
         if (savedIp != 0)
@@ -943,6 +1136,9 @@ void readPreferences()
         }
     }
     prefs.end();
+    
+    if (useMutex)
+        xSemaphoreGive(prefsMutex);
 
     if (!configIsValid())
     {
@@ -959,9 +1155,11 @@ void readPreferences()
         sensorMode = SENSOR_MODE_REAL;
         APpassword = AP_PASSWORD;
         adminPassword = ADMIN_PASSWORD;
+        lockState();
         totalRuntimeMs = 0;
         runtimePersistedMs = 0;
         runtimeActivePersisted = false;
+        unlockState();
         writePreferences();
         writeRuntimePreferences();
     }
@@ -971,21 +1169,37 @@ void readPreferences()
 
 void trySignalKDiscovery()
 {
-    if (!signalkDiscoveryPending) return;
-    if (wifiModeApSta != 1 || WiFi.status() != WL_CONNECTED) return;
-    if (millis() - lastDiscoveryAttempt < SIGNALK_RETRY_MS) return;
+    // Read discovery state under lock
+    lockState();
+    bool discoveryPending = signalkDiscoveryPending;
+    int wifiMode = wifiModeApSta;
+    int maxAttempts = signalkMaxAttempts;
+    int attempts = signalkDiscoveryAttempts;
+    bool continuous = signalkDiscoveryContinuous;
+    unsigned long lastAttempt = lastDiscoveryAttempt;
+    unlockState();
+    
+    if (!discoveryPending) return;
+    if (wifiMode != 1 || WiFi.status() != WL_CONNECTED) return;
+    if (millis() - lastAttempt < SIGNALK_RETRY_MS) return;
 
-    if (!signalkDiscoveryContinuous && signalkMaxAttempts > 0 && signalkDiscoveryAttempts >= signalkMaxAttempts)
+    if (!continuous && maxAttempts > 0 && attempts >= maxAttempts)
     {
+        lockState();
         signalkDiscoveryPending = false;
-        LOG_INFF("SignalK discovery: stopped after %d attempts", signalkDiscoveryAttempts);
-        addMonitorEvent("SK", "Discovery stopped after " + String(signalkDiscoveryAttempts) + " attempts");
+        unlockState();
+        LOG_INFF("SignalK discovery: stopped after %d attempts", attempts);
+        addMonitorEvent("SK", "Discovery stopped after " + String(attempts) + " attempts");
         return;
     }
 
+    lockState();
     lastDiscoveryAttempt = millis();
     signalkDiscoveryAttempts++;
-    LOG_INFF("SignalK discovery attempt %d/%d...", signalkDiscoveryAttempts, signalkMaxAttempts);
+    int currentAttempts = signalkDiscoveryAttempts;
+    unlockState();
+    
+    LOG_INFF("SignalK discovery attempt %d/%d...", currentAttempts, maxAttempts);
 
     int n = MDNS.queryService("signalk-ws", "tcp");
     if (n > 0)
@@ -1024,6 +1238,8 @@ void trySignalKDiscovery()
             return;
         }
 
+        // Update network state under lock
+        lockState();
         ip1 = resolved;
         signalkServicePort = (signalkPort > 0) ? (unsigned int)signalkPort : 3000;
         signalkDiscoveryPending = false;
@@ -1031,9 +1247,15 @@ void trySignalKDiscovery()
         signalkDiscoveryAttempts = 0;
         signalkServerReachable = false;
         lastSignalkProbeMs = 0;
+        unlockState();
+
+        if (prefsMutex)
+            xSemaphoreTake(prefsMutex, portMAX_DELAY);
         prefs.begin("config", false);
         prefs.putUInt("signalkIp", (uint32_t)ip1);
         prefs.end();
+        if (prefsMutex)
+            xSemaphoreGive(prefsMutex);
 
         LOG_INFF("SignalK found: %s (service port %d, UDP port %d)",
                  ip1.toString().c_str(), signalkPort, outPort);
@@ -1044,26 +1266,12 @@ void trySignalKDiscovery()
 
         if (shouldSendUdpData())
         {
-            char udpmessage[256];
-            sprintf(udpmessage,
-                    "{\"updates\":[{\"$source\":\"ESP32.watermaker\","
-                    "\"values\":[{\"path\":\"environment.watermaker.pressure.high\","
-                    "\"value\":%.3f},{\"path\":\"environment.watermaker.pressure.low\","
-                    "\"value\":%.3f}]}]}",
-                    pressure2, pressure1);
-            Udp.beginPacket(ip1, outPort);
-            Udp.write((const uint8_t *)udpmessage, strlen(udpmessage));
-            int udpResult = Udp.endPacket();
-            if (udpResult == 1)
+            SharedStateSnapshot snapshot;
+            float low, high;
+            if (shouldSendUdpUpdate(snapshot, low, high))
             {
-                LOG_VRBF("SignalK UDP sent: HP=%.2f LP=%.2f", pressure2, pressure1);
-                addMonitorEvent("UDP", "Initial send OK " + ip1.toString() + ":" + String(outPort) +
-                                       " hp=" + String(pressure2, 2) + " lp=" + String(pressure1, 2));
-            }
-            else
-            {
-                LOG_ERRF("SignalK initial UDP send failed: result=%d", udpResult);
-                addMonitorEvent("ERR", "Initial UDP send failed " + ip1.toString() + ":" + String(outPort));
+                sendUDP(snapshot);
+                commitUdpSentValues(low, high);
             }
         }
         return;
@@ -1075,32 +1283,28 @@ void trySignalKDiscovery()
     }
 }
 
-void sendUDP()
+void sendUDP(const SharedStateSnapshot &snapshot)
 {
-    if (!shouldSendUdpData()) return;
-    SharedStateSnapshot snapshot;
-    captureSharedState(snapshot);
-
     char udpmessage[256];
     sprintf(udpmessage,
             "{\"updates\":[{\"$source\":\"ESP32.watermaker\","
             "\"values\":[{\"path\":\"environment.watermaker.pressure.high\","
-            "\"value\":%.3f},{\"path\":\"environment.watermaker.pressure.low\","
-            "\"value\":%.3f}]}]}",
-            snapshot.pressure2, snapshot.pressure1);
-    Udp.beginPacket(snapshot.signalkIp, snapshot.udpPort);
+            "\"value\":%.1f},{\"path\":\"environment.watermaker.pressure.low\","
+            "\"value\":%.1f}]}]}",
+            snapshot.udpAvgPressure2, snapshot.udpAvgPressure1);
+    Udp.beginPacket(IPAddress(255, 255, 255, 255), snapshot.udpPort);
     Udp.write((const uint8_t *)udpmessage, strlen(udpmessage));
     int udpResult = Udp.endPacket();
     if (udpResult == 1)
     {
-        LOG_VRBF("UDP sent: HP=%.2f LP=%.2f", snapshot.pressure2, snapshot.pressure1);
-        addMonitorEvent("UDP", "Send OK " + snapshot.signalkIp.toString() + ":" + String(snapshot.udpPort) +
-                               " hp=" + String(snapshot.pressure2, 2) + " lp=" + String(snapshot.pressure1, 2));
+        LOG_VRBF("UDP sent avg: HP=%.1f LP=%.1f", snapshot.udpAvgPressure2, snapshot.udpAvgPressure1);
+        addMonitorEvent("UDP", "Broadcast OK 255.255.255.255:" + String(snapshot.udpPort) +
+                               " hp=" + String(snapshot.udpAvgPressure2, 1) + " lp=" + String(snapshot.udpAvgPressure1, 1));
     }
     else
     {
         LOG_ERRF("UDP send failed: result=%d", udpResult);
-        addMonitorEvent("ERR", "UDP send failed " + snapshot.signalkIp.toString() + ":" + String(snapshot.udpPort));
+        addMonitorEvent("ERR", "UDP broadcast failed 255.255.255.255:" + String(snapshot.udpPort));
     }
 }
 
@@ -1150,11 +1354,22 @@ void taskNetwork(void *parameter)
                 handleConnected();
                 tryingToConnect = false;
             }
-            else if (millis() - lastSendTime >= interval)
+            else
             {
-                lastSendTime = millis();
-                if (shouldSendUdpData())
-                    sendUDP();
+                if (millis() - lastSendTime >= UDP_SEND_INTERVAL_MS)
+                {
+                    lastSendTime = millis();
+                    if (shouldSendUdpData())
+                    {
+                        SharedStateSnapshot snapshot;
+                        float low, high;
+                        if (shouldSendUdpUpdate(snapshot, low, high))
+                        {
+                            sendUDP(snapshot);
+                            commitUdpSentValues(low, high);
+                        }
+                    }
+                }
             }
         }
 
@@ -1188,22 +1403,36 @@ void updatePressureReadings()
         int16_t adc0 = ads.readADC_SingleEnded(0);
         int16_t adc1 = ads.readADC_SingleEnded(1);
 
-        voltage1 = adcToVoltage(adc0);
-        voltage2 = adcToVoltage(adc1);
-
-        pressure1 = mapToPressure(voltage1, minVoltage1, maxVoltage1, minPressure1, maxPressure1);
-        pressure2 = mapToPressure(voltage2, minVoltage2, maxVoltage2, minPressure2, maxPressure2);
+        // Calculate locally first
+        float newVoltage1 = adcToVoltage(adc0);
+        float newVoltage2 = adcToVoltage(adc1);
+        float newPressure1 = mapToPressure(newVoltage1, minVoltage1, maxVoltage1, minPressure1, maxPressure1);
+        float newPressure2 = mapToPressure(newVoltage2, minVoltage2, maxVoltage2, minPressure2, maxPressure2);
+        
+        // Publish atomically under lock
         lockState();
+        voltage1 = newVoltage1;
+        voltage2 = newVoltage2;
+        pressure1 = newPressure1;
+        pressure2 = newPressure2;
         lastSensorUpdateMs = millis();
         unlockState();
     }
     else
     {
-        voltage1 = minVoltage1 + 0.15f;
-        voltage2 = minVoltage2 + 0.15f;
+        float newVoltage1 = minVoltage1 + 0.15f;
+        float newVoltage2 = minVoltage2 + 0.15f;
+        
         updateDemoPressures();
+        
+        // Publish demo voltages atomically
+        lockState();
+        voltage1 = newVoltage1;
+        voltage2 = newVoltage2;
+        unlockState();
     }
 
+    recordUdpPressureSample(pressure1, pressure2);
     updateDeviceError();
 
     static unsigned long lastVoltageLogMs = 0;
@@ -1435,7 +1664,10 @@ void appendSettingsJson(String &json)
     json += "\"signalkIp\":\"" + (isValidIP(ip1) ? ip1.toString() : String("0.0.0.0")) + "\",";
     json += "\"APpassword\":\"" + jsonEscape(APpassword) + "\",";
     json += "\"adminPassword\":\"" + jsonEscape(adminPassword) + "\",";
-    json += "\"totalRuntimeMs\":" + String((unsigned long long)totalRuntimeMs);
+    lockState();
+    uint64_t runtimeVal = totalRuntimeMs;
+    unlockState();
+    json += "\"totalRuntimeMs\":" + String((unsigned long long)runtimeVal);
 }
 
 void sendSettingsJson()
@@ -1562,9 +1794,11 @@ bool applySettingsPayload(const DeviceSettingsPayload &payload, bool jsonRespons
     signalkMaxAttempts = (payload.signalkMaxAttempts >= 0 && payload.signalkMaxAttempts <= 60) ? payload.signalkMaxAttempts : DEFAULT_SIGNALK_MAX_ATTEMPTS;
     outPort = (payload.outPort >= 1024 && payload.outPort <= 65535) ? payload.outPort : DEFAULT_UDP_PORT;
     ip1 = parsedIp;
+    lockState();
     totalRuntimeMs = payload.totalRuntimeMs;
     runtimePersistedMs = totalRuntimeMs;
     runtimeActivePersisted = runtimeRunning;
+    unlockState();
     signalkServicePort = 3000;
     signalkServerReachable = false;
     lastSignalkProbeMs = 0;
@@ -1596,6 +1830,7 @@ bool applySettingsPayload(const DeviceSettingsPayload &payload, bool jsonRespons
         pressure1 = 0.0f;
         pressure2 = 0.0f;
         lastSensorUpdateMs = 0;
+        resetUdpPressureHistory();
         updatePressureReadings();
     }
 
@@ -1640,7 +1875,8 @@ bool readSettingsFromJson(DeviceSettingsPayload &payload, String &errorMessage)
         return false;
     }
 
-    JsonDocument doc;
+    // Use StaticJsonDocument with explicit capacity for deterministic behavior
+    StaticJsonDocument<768> doc;
     DeserializationError err = deserializeJson(doc, server.arg("plain"));
     if (err)
     {
@@ -1663,7 +1899,9 @@ bool readSettingsFromJson(DeviceSettingsPayload &payload, String &errorMessage)
     payload.signalkIp = String((const char *)(doc["signalkIp"] | (isValidIP(ip1) ? ip1.toString().c_str() : "0.0.0.0")));
     payload.apPassword = String((const char *)(doc["APpassword"] | APpassword.c_str()));
     payload.adminPassword = String((const char *)(doc["adminPassword"] | adminPassword.c_str()));
+    lockState();
     payload.totalRuntimeMs = doc["totalRuntimeMs"] | totalRuntimeMs;
+    unlockState();
     return true;
 }
 
@@ -1674,6 +1912,10 @@ void Event_ApiSettingsGet()
 
 void Event_ApiSettingsPost()
 {
+    lockState();
+    uint64_t currentRuntime = totalRuntimeMs;
+    unlockState();
+    
     DeviceSettingsPayload payload = {
         maxPressure1,
         minPressure1,
@@ -1690,7 +1932,7 @@ void Event_ApiSettingsPost()
         isValidIP(ip1) ? ip1.toString() : String("0.0.0.0"),
         APpassword,
         adminPassword,
-        totalRuntimeMs,
+        currentRuntime,
     };
     String errorMessage;
     if (!readSettingsFromJson(payload, errorMessage))
@@ -1800,9 +2042,13 @@ void Event_SetSignalKIp()
         addMonitorEvent("SK", "IP cleared from UI, rediscovery started");
     }
 
+    if (prefsMutex)
+        xSemaphoreTake(prefsMutex, portMAX_DELAY);
     prefs.begin("config", false);
     prefs.putUInt("signalkIp", (uint32_t)ip1);
     prefs.end();
+    if (prefsMutex)
+        xSemaphoreGive(prefsMutex);
 
     server.sendHeader("Cache-Control", "no-cache");
     server.send(200, "application/json",
@@ -2058,9 +2304,15 @@ float mapToPressure(float voltage, float minVoltage, float maxVoltage, float min
 void Event_Factory()
 {
     LOG_INF("Factory reset requested");
+    
+    if (prefsMutex)
+        xSemaphoreTake(prefsMutex, portMAX_DELAY);
     prefs.begin("config", false);
     prefs.clear();
     prefs.end();
+    if (prefsMutex)
+        xSemaphoreGive(prefsMutex);
+    
     adminSessionToken = "";
     adminSessionExpiresMs = 0;
 
@@ -2117,8 +2369,33 @@ void setup()
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, HIGH);
 
-    // Read preferences
+    // Create state mutex - critical for concurrency safety
     stateMutex = xSemaphoreCreateMutex();
+    if (stateMutex == nullptr)
+    {
+        LOG_ERR("CRITICAL: Failed to create state mutex. System cannot operate safely.");
+        addMonitorEvent("ERR", "CRITICAL: mutex creation failed");
+        // Halt - system cannot operate without mutex protection
+        while (true) {
+            delay(1000);
+            Serial.println("[FATAL] No state mutex - system halted");
+        }
+    }
+    LOG_INF("State mutex created successfully");
+    
+    // Create preferences mutex for NVS protection
+    prefsMutex = xSemaphoreCreateMutex();
+    if (prefsMutex == nullptr)
+    {
+        LOG_ERR("WARNING: Failed to create prefs mutex. NVS operations will be unprotected.");
+        addMonitorEvent("ERR", "WARNING: prefs mutex creation failed");
+        // Continue without prefs mutex - not fatal but not ideal
+    }
+    else
+    {
+        LOG_INF("Prefs mutex created successfully");
+    }
+    
     readPreferences();
 
     // Init I2C before probing any device on the bus
@@ -2143,34 +2420,49 @@ void setup()
         addMonitorEvent("SYS", "ADS1115 detected");
     }
 
-    // Init OLED
-    display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
-    displayAvailable = true;
-    display.clearDisplay();
-    display.display();
-    LOG_INF("Display OK");
+    // Init OLED - try to detect and initialize
+    Wire.beginTransmission(OLED_ADDR);
+    bool oledPresent = (Wire.endTransmission() == 0);
+    
+    if (oledPresent)
+    {
+        display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
+        displayAvailable = true;
+        display.clearDisplay();
+        display.display();
+        LOG_INF("Display OK");
+    }
+    else
+    {
+        displayAvailable = false;
+        LOG_ERR("OLED display not found at address 0x3C");
+        addMonitorEvent("ERR", "OLED not found");
+    }
 
-    // Show startup screen
-    display.clearDisplay();
-    display.setTextColor(WHITE);
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.print("MAB WaterMaker");
-    display.setCursor(0, 12);
-    display.print("Starting...");
-    display.setCursor(0, 26);
-    display.print(SW_VERSION);
-    if (isDemoMode())
+    // Show startup screen (only if display is available)
+    if (displayAvailable)
     {
-        display.setCursor(0, 38);
-        display.print(sensorMode == SENSOR_MODE_DEMO ? "Demo" : "Demo+UDP");
+        display.clearDisplay();
+        display.setTextColor(WHITE);
+        display.setTextSize(1);
+        display.setCursor(0, 0);
+        display.print("MAB WaterMaker");
+        display.setCursor(0, 12);
+        display.print("Starting...");
+        display.setCursor(0, 26);
+        display.print(SW_VERSION);
+        if (isDemoMode())
+        {
+            display.setCursor(0, 38);
+            display.print(sensorMode == SENSOR_MODE_DEMO ? "Demo" : "Demo+UDP");
+        }
+        else if (!Ads1115Found)
+        {
+            display.setCursor(0, 38);
+            display.print("No ADS1115");
+        }
+        display.display();
     }
-    else if (!Ads1115Found)
-    {
-        display.setCursor(0, 38);
-        display.print("No ADS1115");
-    }
-    display.display();
     updateDeviceError();
     updatePressureReadings();
 
