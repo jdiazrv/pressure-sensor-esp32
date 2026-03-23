@@ -118,8 +118,14 @@
 #define SENSOR_MODE_DEMO_UDP 2
 #define DEFAULT_SIGNALK_MAX_ATTEMPTS 12
 #define DEFAULT_UDP_PORT 4210
-#define SIGNALK_RETRY_MS 60000
-#define SIGNALK_PROBE_MS 60000
+
+// SignalK timing - FAST right after events, SLOW in steady state
+#define SIGNALK_PROBE_FAST_MS 5000UL
+#define SIGNALK_PROBE_SLOW_MS 60000UL
+#define SIGNALK_DISCOVERY_FAST_MS 5000UL
+#define SIGNALK_DISCOVERY_SLOW_MS 60000UL
+#define SIGNALK_RETRY_MS 60000UL  // Legacy, kept for compatibility
+
 #define SIGNALK_TCP_PROBE_TIMEOUT_MS 500
 #define RUNTIME_START_LOW_PRESSURE_BAR 1.0f
 #define RUNTIME_STOP_HIGH_PRESSURE_BAR 10.0f
@@ -152,6 +158,37 @@ Preferences prefs;
 SemaphoreHandle_t stateMutex = nullptr;
 SemaphoreHandle_t prefsMutex = nullptr;  // Mutex for NVS/Preferences operations
 
+// ── SignalK State Machine ────────────────────────────────────────────────────────
+enum SignalKState : uint8_t
+{
+    SK_DISABLED = 0,         // WiFi mode no STA o sin red relevante
+    SK_NO_TARGET = 1,        // No IP conocida y no resuelto
+    SK_DISCOVERING = 2,      // Buscando por mDNS
+    SK_TARGET_KNOWN = 3,     // Hay IP conocida pero aún no validada recientemente
+    SK_REACHABLE = 4,        // Probe TCP OK
+    SK_UNREACHABLE = 5       // IP conocida pero probe fallido
+};
+
+struct SignalKContext
+{
+    SignalKState state = SK_NO_TARGET;
+    IPAddress targetIp = IPAddress(0,0,0,0);
+    uint16_t servicePort = 3000;
+    uint16_t udpPort = DEFAULT_UDP_PORT;
+
+    bool continuousDiscovery = false;
+    bool hadSuccessfulProbe = false;
+
+    uint8_t discoveryAttempts = 0;
+    unsigned long lastDiscoveryAttemptMs = 0;
+    unsigned long lastProbeMs = 0;
+};
+
+SignalKContext signalkCtx;
+
+// Legacy globals for backward compatibility (will be removed in future refactor)
+// Using signalkCtx directly instead
+
 // Sensor configuration
 float minVoltage1 = MIN_VOLTAGE1;
 float maxVoltage1 = MAX_VOLTAGE1;
@@ -176,13 +213,47 @@ IPAddress ip1 = IPAddress(0, 0, 0, 0);
 unsigned int outPort = DEFAULT_UDP_PORT;
 unsigned int signalkServicePort = 3000;
 int signalkMaxAttempts = DEFAULT_SIGNALK_MAX_ATTEMPTS;
+// SignalK state - legacy aliases for backward compatibility (mirror signalkCtx)
+// These are updated by syncSignalKLegacyGlobals() after state changes
 int signalkDiscoveryAttempts = 0;
 bool signalkDiscoveryPending = false;
-unsigned long lastDiscoveryAttempt = 0;
 bool signalkServerReachable = false;
 bool signalkHadSuccessfulProbe = false;
 bool signalkDiscoveryContinuous = false;
+unsigned long lastDiscoveryAttempt = 0;
 unsigned long lastSignalkProbeMs = 0;
+
+static void syncSignalKLegacyGlobals()
+{
+    signalkCtx.discoveryAttempts = (uint8_t)signalkDiscoveryAttempts;
+    signalkCtx.continuousDiscovery = signalkDiscoveryContinuous;
+    signalkCtx.hadSuccessfulProbe = signalkHadSuccessfulProbe;
+    signalkCtx.lastDiscoveryAttemptMs = lastDiscoveryAttempt;
+    signalkCtx.lastProbeMs = lastSignalkProbeMs;
+    
+    // Derive state from legacy flags
+    if (wifiModeApSta != 1) {
+        signalkCtx.state = SK_DISABLED;
+    } else if (signalkServerReachable) {
+        signalkCtx.state = SK_REACHABLE;
+    } else if (signalkDiscoveryPending) {
+        signalkCtx.state = SK_DISCOVERING;
+    } else if (ip1 != IPAddress(0,0,0,0)) {
+        signalkCtx.state = SK_UNREACHABLE;
+    } else {
+        signalkCtx.state = SK_NO_TARGET;
+    }
+    
+    // Sync context to legacy
+    signalkDiscoveryAttempts = signalkCtx.discoveryAttempts;
+    signalkDiscoveryContinuous = signalkCtx.continuousDiscovery;
+    signalkHadSuccessfulProbe = signalkCtx.hadSuccessfulProbe;
+    lastDiscoveryAttempt = signalkCtx.lastDiscoveryAttemptMs;
+    lastSignalkProbeMs = signalkCtx.lastProbeMs;
+    signalkServerReachable = (signalkCtx.state == SK_REACHABLE);
+    signalkDiscoveryPending = (signalkCtx.state == SK_DISCOVERING);
+}
+
 int sensorMode = SENSOR_MODE_REAL;
 
 // Device configuration
@@ -318,6 +389,13 @@ void resetUdpPressureHistory();
 bool shouldSendUdpUpdate(SharedStateSnapshot &snapshot, float &outLow, float &outHigh);
 void commitUdpSentValues(float low, float high);
 void sendUDP(const SharedStateSnapshot &snapshot);
+
+// SignalK state management helpers
+void setSignalKState(SignalKState newState);
+bool setSignalKTarget(IPAddress newIp, uint16_t newServicePort, bool persist);
+bool shouldAttemptSignalKDiscovery();
+bool shouldAttemptSignalKProbe();
+void updateSignalKStateOnWifiChange();
 
 bool isValidIP(const IPAddress &ip)
 {
@@ -661,6 +739,151 @@ void commitUdpSentValues(float low, float high)
     unlockState();
 }
 
+// ── SignalK State Management ─────────────────────────────────────────────────────
+
+void setSignalKState(SignalKState newState)
+{
+    if (signalkCtx.state == newState) return;
+    
+    SignalKState oldState = signalkCtx.state;
+    signalkCtx.state = newState;
+    
+    // Update legacy globals for compatibility
+    syncSignalKLegacyGlobals();
+    
+    // State-specific actions
+    switch (newState)
+    {
+        case SK_NO_TARGET:
+            signalkCtx.discoveryAttempts = 0;
+            signalkCtx.lastProbeMs = 0;
+            break;
+            
+        case SK_DISCOVERING:
+            signalkCtx.lastProbeMs = 0;
+            break;
+            
+        case SK_TARGET_KNOWN:
+            signalkCtx.lastProbeMs = 0;
+            break;
+            
+        case SK_REACHABLE:
+            signalkCtx.hadSuccessfulProbe = true;
+            break;
+            
+        case SK_UNREACHABLE:
+            // Keep hadSuccessfulProbe for rediscovery logic
+            break;
+            
+        default:
+            break;
+    }
+    
+    if (oldState != newState)
+    {
+        LOG_INFF("SignalK state: %d -> %d", (int)oldState, (int)newState);
+    }
+}
+
+bool setSignalKTarget(IPAddress newIp, uint16_t newServicePort, bool persist)
+{
+    bool changed = (newIp != signalkCtx.targetIp) || (newServicePort != signalkCtx.servicePort);
+    
+    lockState();
+    signalkCtx.targetIp = newIp;
+    signalkCtx.servicePort = newServicePort;
+    // Also update legacy globals
+    ip1 = newIp;
+    signalkServicePort = newServicePort;
+    unlockState();
+    
+    if (changed && persist && newIp != IPAddress(0,0,0,0))
+    {
+        if (prefsMutex)
+            xSemaphoreTake(prefsMutex, portMAX_DELAY);
+        prefs.begin("config", false);
+        prefs.putUInt("signalkIp", (uint32_t)newIp);
+        prefs.end();
+        if (prefsMutex)
+            xSemaphoreGive(prefsMutex);
+        LOG_INFF("SignalK target persisted: %s:%d", newIp.toString().c_str(), newServicePort);
+    }
+    
+    return changed;
+}
+
+bool shouldAttemptSignalKDiscovery()
+{
+    if (wifiModeApSta != 1) return false;
+    if (WiFi.status() != WL_CONNECTED) return false;
+    if (signalkCtx.state != SK_DISCOVERING) return false;
+    
+    unsigned long now = millis();
+    unsigned long retryInterval = signalkCtx.continuousDiscovery 
+                                   ? SIGNALK_DISCOVERY_FAST_MS 
+                                   : SIGNALK_DISCOVERY_SLOW_MS;
+    
+    if (now - signalkCtx.lastDiscoveryAttemptMs < retryInterval) return false;
+    
+    if (!signalkCtx.continuousDiscovery &&
+        signalkMaxAttempts > 0 &&
+        signalkCtx.discoveryAttempts >= (uint8_t)signalkMaxAttempts)
+        return false;
+    
+    return true;
+}
+
+bool shouldAttemptSignalKProbe()
+{
+    if (wifiModeApSta != 1) return false;
+    if (WiFi.status() != WL_CONNECTED) return false;
+    if (signalkCtx.targetIp == IPAddress(0,0,0,0)) return false;
+    
+    // Only probe if we have a target (TARGET_KNOWN, REACHABLE, or UNREACHABLE)
+    if (signalkCtx.state != SK_TARGET_KNOWN && 
+        signalkCtx.state != SK_REACHABLE &&
+        signalkCtx.state != SK_UNREACHABLE)
+        return false;
+    
+    unsigned long now = millis();
+    unsigned long probeInterval = (signalkCtx.state == SK_UNREACHABLE) 
+                                   ? SIGNALK_PROBE_FAST_MS 
+                                   : SIGNALK_PROBE_SLOW_MS;
+    
+    if (now - signalkCtx.lastProbeMs < probeInterval) return false;
+    
+    return true;
+}
+
+void updateSignalKStateOnWifiChange()
+{
+    if (wifiModeApSta != 1 || WiFi.status() != WL_CONNECTED)
+    {
+        // WiFi down - disable SignalK
+        if (signalkCtx.state != SK_DISABLED)
+        {
+            signalkCtx.state = SK_DISABLED;
+            syncSignalKLegacyGlobals();
+            LOG_INF("SignalK: WiFi down, state=DISABLED");
+        }
+    }
+    else
+    {
+        // WiFi up - resume based on target
+        if (signalkCtx.state == SK_DISABLED)
+        {
+            if (signalkCtx.targetIp != IPAddress(0,0,0,0))
+            {
+                setSignalKState(SK_UNREACHABLE);  // Will probe
+            }
+            else
+            {
+                setSignalKState(SK_DISCOVERING);
+            }
+        }
+    }
+}
+
 bool isSystemRunning()
 {
     SharedStateSnapshot snapshot;
@@ -772,12 +995,20 @@ void probeSignalKServer(bool force)
     }
 
     unsigned long now = millis();
-    
+
     lockState();
     unsigned long lastProbe = lastSignalkProbeMs;
     unlockState();
+
+    // Use FAST interval if recently unreachable, SLOW otherwise
+    unsigned long probeInterval = SIGNALK_PROBE_SLOW_MS;
+    lockState();
+    // Check if state is SK_UNREACHABLE (value 5) for fast retry
+    if (signalkCtx.state == SK_UNREACHABLE)
+        probeInterval = SIGNALK_PROBE_FAST_MS;
+    unlockState();
     
-    if (!force && lastProbe != 0 && now - lastProbe < SIGNALK_PROBE_MS)
+    if (!force && lastProbe != 0 && now - lastProbe < probeInterval)
         return;
 
     lockState();
