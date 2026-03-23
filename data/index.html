@@ -135,7 +135,7 @@
         <div class="metric">
           <div class="metric-label">Tiempo total</div>
           <div class="metric-value" id="totalTime">0.0 h</div>
-          <div class="metric-sub" id="totalSub">Acumulado local del navegador</div>
+          <div class="metric-sub" id="totalSub">Acumulado guardado en el equipo</div>
         </div>
       </div>
     </section>
@@ -213,12 +213,9 @@
     var updateInterval = 1000;
     var runtime = {
       running: false,
-      currentStartMs: null,
-      accumulatedMs: 0,
-      lastPersistMs: 0
+      partialMs: 0,
+      totalMs: 0
     };
-
-    var STORAGE_KEY = 'mab_watermaker_total_runtime_ms';
     var HISTORY_WINDOW_MS = 5 * 60 * 1000;
     var DEMO_SWEEP_STEP_MS = 38;
     var demoSweepTimer = null;
@@ -239,7 +236,6 @@
     gauges.high.refs.tickMid = document.getElementById('highTickMid');
 
     document.addEventListener('DOMContentLoaded', function() {
-      hydrateStoredRuntime();
       initializeUI();
       startDemoSweep();
       document.getElementById('skPill').addEventListener('click', promptSignalKIp);
@@ -367,7 +363,7 @@
       if (currentRSSI === null) {
         pill.classList.add('off');
         valueEl.textContent = '--';
-        document.getElementById('totalSub').textContent = 'Acumulado local del navegador';
+        document.getElementById('totalSub').textContent = 'Acumulado guardado en el equipo';
         return;
       }
       var level = 1;
@@ -376,7 +372,7 @@
       else if (currentRSSI >= -75) level = 2;
       pill.classList.add('level-' + level);
       valueEl.textContent = Math.round(currentRSSI) + ' dBm';
-      document.getElementById('totalSub').textContent = 'Acumulado local del navegador';
+      document.getElementById('totalSub').textContent = 'Acumulado guardado en el equipo';
     }
 
     function updateSignalKPill() {
@@ -528,43 +524,16 @@
       document.getElementById('partialSub').textContent = 'Última lectura ' + timeString;
     }
 
-    function hydrateStoredRuntime() {
-      var saved = parseInt(localStorage.getItem(STORAGE_KEY) || '0', 10);
-      runtime.accumulatedMs = isNaN(saved) ? 0 : saved;
-      runtime.lastPersistMs = runtime.accumulatedMs;
-    }
-
-    function persistRuntime(force) {
-      var total = runtime.accumulatedMs + (runtime.running && runtime.currentStartMs ? (Date.now() - runtime.currentStartMs) : 0);
-      if (force || Math.abs(total - runtime.lastPersistMs) >= 60000) {
-        localStorage.setItem(STORAGE_KEY, String(total));
-        runtime.lastPersistMs = total;
-      }
-    }
-
-    function updateRuntimeState(highValue) {
-      var cfg = gauges.high;
-      var green = findPrimaryGreenRange(cfg.highlights);
-      var runningThreshold = green ? Math.max(cfg.min, green.from) : (cfg.min + cfg.range * 0.18);
-      var nowRunning = highValue >= runningThreshold;
-      if (nowRunning && !runtime.running) {
-        runtime.running = true;
-        runtime.currentStartMs = Date.now();
-      } else if (!nowRunning && runtime.running) {
-        runtime.accumulatedMs += Date.now() - runtime.currentStartMs;
-        runtime.running = false;
-        runtime.currentStartMs = null;
-        persistRuntime(true);
-      }
-      if (runtime.running) persistRuntime(false);
+    function updateRuntimeState(data) {
+      runtime.running = !!(data && data.systemRunning);
+      runtime.partialMs = parseInt(data && data.partialRuntimeMs, 10) || 0;
+      runtime.totalMs = parseInt(data && data.totalRuntimeMs, 10) || 0;
       updateRuntimeUI();
     }
 
     function updateRuntimeUI() {
-      var partialMs = runtime.running && runtime.currentStartMs ? (Date.now() - runtime.currentStartMs) : 0;
-      var totalMs = runtime.accumulatedMs + partialMs;
-      document.getElementById('partialTime').textContent = formatDuration(partialMs);
-      document.getElementById('totalTime').textContent = formatHours(totalMs);
+      document.getElementById('partialTime').textContent = formatDuration(runtime.partialMs);
+      document.getElementById('totalTime').textContent = formatHours(runtime.totalMs);
       document.getElementById('partialSub').textContent = runtime.running ? 'Equipo en marcha' : 'Equipo detenido';
       updateLastUpdateTime();
     }
@@ -650,7 +619,7 @@
                 stopDemoSweep();
                 updateGaugeCard(gauges.low, low, 'low');
                 updateGaugeCard(gauges.high, high, 'high');
-                updateRuntimeState(high);
+                updateRuntimeState(data);
                 updateLastUpdateTime();
                 updateHero(low, high);
               } else {
