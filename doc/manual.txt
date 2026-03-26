@@ -1,1 +1,58 @@
-d
+MAB WaterMaker - Pressure Sensor ESP32
+Manual operativo (v1.5)
+
+1) Resumen
+- El equipo mide dos presiones con ADS1115.
+- Publica datos por web local y por UDP para SignalK.
+- Permite modo real, demo y demo+UDP.
+
+2) Entradas y canales
+- Sensor 1: presion baja (feed/inlet).
+- Sensor 2: presion alta (main).
+- Rango por defecto de sensores: 0.5-4.5 V.
+
+3) Red y acceso
+- En modo cliente (STA), intenta conectarse al WiFi configurado.
+- Si no hay credenciales, levanta portal de configuracion con WiFiManager.
+- Dashboard principal: / (raiz del dispositivo).
+- Ajustes: /config.
+
+4) SignalK
+- Descubrimiento automatico por mDNS.
+- Configuracion manual de IP desde dashboard.
+- Se acepta formato ip o ip:puerto (ejemplo: 192.168.1.10:3000).
+- Puerto de servicio SignalK por defecto: 3000.
+- Puerto UDP configurable (por defecto 4210).
+
+5) Indicacion por LEDs (v1.5)
+- Error ADS1115 en modo real: parpadeo rapido en los dos LEDs.
+- AP only: LED1 doble pulso, LED2 apagado.
+- WiFi desconectado/conectando: LED1 parpadeo medio (o triple pulso en ventana portal), LED2 apagado.
+- WiFi conectado:
+	- SignalK buscando: LED2 doble pulso.
+	- SignalK OK: LED2 fijo (si no hay timeout de datos).
+	- SignalK sin respuesta: LED2 parpadeo medio.
+
+6) Dashboard (v1.5)
+- Muestra presion baja/alta y voltaje de cada canal.
+- Chip de estado por color: Warning / Normal / Alarm.
+- "Last reading" actualizado de forma robusta.
+- Marcadores min/max de barra actualizados periodicamente en bloques de 1 minuto.
+
+7) Deteccion ADS1115
+- Escaneo de direcciones validas: 0x48, 0x49, 0x4A, 0x4B.
+- Si no lo detecta, registra diagnostico I2C por serie.
+
+8) OTA
+- Firmware: /update.
+- Filesystem: /updatefs.
+
+9) Build y carga (PlatformIO)
+- Compilar firmware: platformio run -e esp32dev
+- Subir firmware: platformio run -e esp32dev -t upload
+- Subir filesystem: platformio run -e esp32dev -t uploadfs
+
+10) Notas de diagnostico
+- Si no hay lecturas en modo real: verificar alimentacion, GND comun, cableado ADS1115, y direccion ADDR.
+- Si hay dashboard pero no SignalK: revisar IP/puerto, mDNS y firewall de la red.
+

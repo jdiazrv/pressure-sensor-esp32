@@ -2,6 +2,9 @@
 // Based on Chain Counter ESP32 mejorado v3.7
 // Dual pressure sensor with SignalK integration
 // Changelog:
+//   v1.6
+//     Change: UDP send interval reduced from 2s to 1s for faster APK updates
+//     Add: voltage1 and voltage2 included in UDP payload for APK display
 //   v1.5
 //     Add: LED state-machine patterns aligned with project status priorities
 //     Add: both LEDs blink fast when ADS1115 is missing in real mode
@@ -88,7 +91,7 @@
 #include "config_html.h"
 
 // ── Versión del software ───────────────────────────────────────────────────────
-#define SW_VERSION "v1.5"
+#define SW_VERSION "v1.6"
 
 // ── Nivel de debug ──────────────────────────────────────────────────────────────
 // 0 = sin logs
@@ -98,7 +101,7 @@
 #define DEBUG_LEVEL_ERROR 1
 #define DEBUG_LEVEL_INFO 2
 #define DEBUG_LEVEL_VERBOSE 3
-#define DEBUG DEBUG_LEVEL_INFO
+#define DEBUG 0
 
 // Macros de logging
 #define LOG_ERR(msg)                      \
@@ -168,7 +171,7 @@
 #define SIGNALK_TCP_PROBE_TIMEOUT_MS 500
 #define RUNTIME_START_LOW_PRESSURE_BAR 1.0f
 #define RUNTIME_STOP_HIGH_PRESSURE_BAR 10.0f
-#define UDP_SEND_INTERVAL_MS 2000UL
+#define UDP_SEND_INTERVAL_MS 1000UL
 #define UDP_AVERAGE_WINDOW 5
 #define RUNTIME_CHECKPOINT_MS 900000UL
 #define SENSOR_DISCONNECT_TOLERANCE_V 0.2f
@@ -1796,21 +1799,24 @@ void readPreferences()
 
 bool sendUDP(const SharedStateSnapshot &snapshot)
 {
-    char udpmessage[256];
+    char udpmessage[512];
     snprintf(udpmessage, sizeof(udpmessage),
             "{\"updates\":[{\"$source\":\"ESP32.watermaker\","
             "\"values\":[{\"path\":\"environment.watermaker.pressure.high\","
             "\"value\":%.1f},{\"path\":\"environment.watermaker.pressure.low\","
-            "\"value\":%.1f}]}]}",
-            snapshot.udpAvgPressure2, snapshot.udpAvgPressure1);
+            "\"value\":%.1f},{\"path\":\"environment.watermaker.voltage.high\","
+            "\"value\":%.3f},{\"path\":\"environment.watermaker.voltage.low\","
+            "\"value\":%.3f}]}]}",
+            snapshot.udpAvgPressure2, snapshot.udpAvgPressure1, snapshot.voltage2, snapshot.voltage1);
     Udp.beginPacket(IPAddress(255, 255, 255, 255), snapshot.udpPort);
     Udp.write((const uint8_t *)udpmessage, strlen(udpmessage));
     int udpResult = Udp.endPacket();
     if (udpResult == 1)
     {
-        LOG_VRBF("UDP sent avg: HP=%.1f LP=%.1f", snapshot.udpAvgPressure2, snapshot.udpAvgPressure1);
+        LOG_VRBF("UDP sent avg: HP=%.1f LP=%.1f V1=%.3f V2=%.3f", snapshot.udpAvgPressure2, snapshot.udpAvgPressure1, snapshot.voltage2, snapshot.voltage1);
         addMonitorEvent("UDP", "Broadcast OK 255.255.255.255:" + String(snapshot.udpPort) +
-                               " hp=" + String(snapshot.udpAvgPressure2, 1) + " lp=" + String(snapshot.udpAvgPressure1, 1));
+                               " hp=" + String(snapshot.udpAvgPressure2, 1) + " lp=" + String(snapshot.udpAvgPressure1, 1) +
+                               " v1=" + String(snapshot.voltage1, 3) + " v2=" + String(snapshot.voltage2, 3));
         return true;
     }
     else
