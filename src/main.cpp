@@ -2,6 +2,16 @@
 // Based on Chain Counter ESP32 mejorado v3.7
 // Dual pressure sensor with SignalK integration
 // Changelog:
+//   v1.5
+//     Add: LED state-machine patterns aligned with project status priorities
+//     Add: both LEDs blink fast when ADS1115 is missing in real mode
+//     Fix: ADS1115 detection scans all valid addresses (0x48-0x4B) with I2C diagnostics
+//     Fix: dashboard renders live bars when readings are available even with device warnings
+//     Add: voltage values in /pressure JSON and on both dashboard cards
+//     Fix: SignalK manual target accepts ip:port format from UI
+//     Fix: Last reading timestamp updates reliably in dashboard polling loop
+//     Change: min/max range markers now update with periodic one-minute buckets
+//     Change: removed duplicated card status text while keeping color label chip
 //   v1.4
 //     Add: I2C mutex for bus serialization (ADS1115 + OLED)
 //     Add: OtaState struct for coherent OTA state management
@@ -78,7 +88,7 @@
 #include "config_html.h"
 
 // ── Versión del software ───────────────────────────────────────────────────────
-#define SW_VERSION "v1.4"
+#define SW_VERSION "v1.5"
 
 // ── Nivel de debug ──────────────────────────────────────────────────────────────
 // 0 = sin logs
@@ -177,8 +187,8 @@
 #define SCREEN_WIDTH 64
 #define SCREEN_HEIGHT 48
 #define OLED_ADDR 0x3C
-#define OLED_SDA 16
-#define OLED_SCL 17
+#define OLED_SDA 21
+#define OLED_SCL 22
 
 Adafruit_SSD1306 display(-1);  // RST = -1 (no reset pin)
 bool displayAvailable = false;
@@ -291,12 +301,26 @@ struct RuntimeState
 RuntimeState runtimeState;
 
 // LED pins
-#define LED_PIN 2
-#define LED_PIN2 4
+#define LED_PIN 18
+#define LED_PIN2 19
 
-// Timing
-unsigned long ledBlinkStart = 0;
-bool ledBlinkActive = false;
+enum LedCode : uint8_t
+{
+    LED_CODE_OFF = 0,
+    LED_CODE_ON,
+    LED_CODE_BLINK_SLOW,
+    LED_CODE_BLINK_MEDIUM,
+    LED_CODE_BLINK_FAST,
+    LED_CODE_DOUBLE_PULSE,
+    LED_CODE_TRIPLE_PULSE,
+};
+
+LedCode led1Code = LED_CODE_OFF;
+LedCode led2Code = LED_CODE_OFF;
+unsigned long led1PatternStartMs = 0;
+unsigned long led2PatternStartMs = 0;
+unsigned long wifiPortalNoticeUntilMs = 0;
+
 char adminPassword[65] = ADMIN_PASSWORD;  // Max 64 chars + null
 char adminSessionToken[33] = "";  // 32 hex chars + null
 unsigned long adminSessionExpiresMs = 0;
@@ -429,6 +453,65 @@ bool sendUDP(const SharedStateSnapshot &snapshot);
 void tickSignalK();
 void setSignalKManualTarget(IPAddress newIp, uint16_t newServicePort, bool persist);
 void clearSignalKTarget(bool persist);
+void handleLEDControl(unsigned long now);
+
+static inline void setStatusLed(uint8_t pin, bool on)
+{
+    // Status LEDs are wired active-low on this board.
+    digitalWrite(pin, on ? LOW : HIGH);
+}
+
+static bool evalLedPattern(unsigned long now, unsigned long startMs,
+                           unsigned long onMs, unsigned long offMs,
+                           uint8_t pulses, unsigned long gapMs)
+{
+    if (pulses == 0)
+        return false;
+
+    const unsigned long pulseSlot = onMs + offMs;
+    const unsigned long activeWindow = pulseSlot * pulses;
+    const unsigned long cycle = activeWindow + gapMs;
+    if (cycle == 0)
+        return false;
+
+    const unsigned long t = (now - startMs) % cycle;
+    if (t >= activeWindow)
+        return false;
+
+    const unsigned long inSlot = t % pulseSlot;
+    return inSlot < onMs;
+}
+
+static bool ledCodeToOn(LedCode code, unsigned long now, unsigned long startMs)
+{
+    switch (code)
+    {
+        case LED_CODE_ON:
+            return true;
+        case LED_CODE_BLINK_SLOW:
+            return evalLedPattern(now, startMs, 80, 2920, 1, 0);
+        case LED_CODE_BLINK_MEDIUM:
+            return evalLedPattern(now, startMs, 300, 300, 1, 0);
+        case LED_CODE_BLINK_FAST:
+            return evalLedPattern(now, startMs, 120, 120, 1, 0);
+        case LED_CODE_DOUBLE_PULSE:
+            return evalLedPattern(now, startMs, 140, 160, 2, 1100);
+        case LED_CODE_TRIPLE_PULSE:
+            return evalLedPattern(now, startMs, 120, 120, 3, 1100);
+        case LED_CODE_OFF:
+        default:
+            return false;
+    }
+}
+
+static void updateLedCode(LedCode newCode, LedCode &currentCode, unsigned long &patternStartMs, unsigned long now)
+{
+    if (newCode != currentCode)
+    {
+        currentCode = newCode;
+        patternStartMs = now;
+    }
+}
 
 bool isValidIP(const IPAddress &ip)
 {
@@ -753,13 +836,81 @@ bool canProduceReadings()
     return mode == SENSOR_MODE_DEMO || mode == SENSOR_MODE_DEMO_UDP || adsFound;
 }
 
+void handleLEDControl(unsigned long now)
+{
+    LedCode nextLed1 = LED_CODE_OFF;
+    LedCode nextLed2 = LED_CODE_OFF;
+
+    ConfigSnapshot config;
+    captureConfigSnapshot(config);
+
+    SignalKState skState = SK_OFF;
+    bool signalKHealthy = false;
+    bool tryingToConnectLocal = false;
+    bool dataTimeout = false;
+    bool adsFound = true;
+    lockState();
+    skState = signalkCtx.state;
+    signalKHealthy = signalkCtx.targetHealthy;
+    tryingToConnectLocal = runtimeState.tryingToConnect;
+    dataTimeout = (runtimeState.lastSensorUpdateMs == 0 || (now - runtimeState.lastSensorUpdateMs) > 5000);
+    adsFound = runtimeState.ads1115Found;
+    unlockState();
+
+    if (config.sensorMode == SENSOR_MODE_REAL && !adsFound)
+    {
+        // Highest priority fault indication: ADS1115 missing in real mode.
+        nextLed1 = LED_CODE_BLINK_FAST;
+        nextLed2 = LED_CODE_BLINK_FAST;
+    }
+    else if (config.wifiModeApSta == 0)
+    {
+        nextLed1 = LED_CODE_DOUBLE_PULSE;
+        nextLed2 = LED_CODE_OFF;
+    }
+    else if (WiFi.status() != WL_CONNECTED || tryingToConnectLocal)
+    {
+        if (now < wifiPortalNoticeUntilMs)
+            nextLed1 = LED_CODE_TRIPLE_PULSE;
+        else
+            nextLed1 = LED_CODE_BLINK_MEDIUM;
+        nextLed2 = LED_CODE_OFF;
+    }
+    else
+    {
+        nextLed1 = LED_CODE_OFF;
+
+        switch (skState)
+        {
+            case SK_SEARCHING:
+                nextLed2 = LED_CODE_DOUBLE_PULSE;
+                break;
+            case SK_READY:
+                if (signalKHealthy)
+                    nextLed2 = dataTimeout ? LED_CODE_BLINK_FAST : LED_CODE_ON;
+                else
+                    nextLed2 = LED_CODE_BLINK_MEDIUM;
+                break;
+            case SK_OFF:
+            default:
+                nextLed2 = LED_CODE_OFF;
+                break;
+        }
+    }
+
+    updateLedCode(nextLed1, led1Code, led1PatternStartMs, now);
+    updateLedCode(nextLed2, led2Code, led2PatternStartMs, now);
+
+    setStatusLed(LED_PIN, ledCodeToOn(led1Code, now, led1PatternStartMs));
+    setStatusLed(LED_PIN2, ledCodeToOn(led2Code, now, led2PatternStartMs));
+}
+
 bool shouldSendUdpData()
 {
     SharedStateSnapshot snapshot;
     captureSharedState(snapshot);
     if (WiFi.status() != WL_CONNECTED || snapshot.wifiModeApSta != 1) return false;
-    if (!snapshotCanProduceReadings(snapshot)) return false;
-    return strlen(snapshot.lastDeviceError) == 0;
+    return snapshotCanProduceReadings(snapshot);
 }
 
 void recordUdpPressureSample(float lowPressure, float highPressure)
@@ -1703,8 +1854,6 @@ void taskNetwork(void *parameter)
 
             if (WiFi.status() != WL_CONNECTED)
             {
-                digitalWrite(LED_PIN, LOW);
-
                 if (!isTryingToConnect)
                 {
                     LOG_INF("WiFi lost - reconnecting");
@@ -2108,9 +2257,9 @@ void Event_pressure()
     bool dataValid = snapshotCanProduceReadings(snapshot) && strlen(snapshot.lastDeviceError) == 0;
     bool systemRunning = isSystemRunning();
     bool udpAllowed = shouldSendUdpData();
-    jsonResponse.reserve(256);
+    jsonResponse.reserve(320);
     jsonResponse = "{";
-    appendPressureReadingsJson(jsonResponse, snapshot, false);
+    appendPressureReadingsJson(jsonResponse, snapshot, true);
     jsonResponse += ",\"rssi\":" + String(rssi) + ",";
     appendRuntimeSummaryJson(jsonResponse, snapshot, dataValid, systemRunning, udpAllowed);
     jsonResponse += ",\"sensorMode\":\"" + String(sensorModeName(snapshot.sensorMode)) + "\",";
@@ -2119,9 +2268,6 @@ void Event_pressure()
     jsonResponse += ",";
     jsonResponse += "\"error\":\"" + jsonEscape(snapshot.lastDeviceError) + "\"";
     jsonResponse += "}";
-    ledBlinkStart = millis();
-    ledBlinkActive = true;
-    digitalWrite(LED_PIN, LOW);
 
     LOG_VRBF("Event_pressure JSON: %s", jsonResponse.c_str());
 
@@ -2607,6 +2753,18 @@ void Event_SetSignalKIp()
     String ipArg = server.arg("ip");
     ipArg.trim();
 
+    // Accept optional ip:port format — strip port if present
+    uint16_t explicitPort = 0;
+    int colonIdx = ipArg.indexOf(':');
+    if (colonIdx >= 0)
+    {
+        String portStr = ipArg.substring(colonIdx + 1);
+        ipArg = ipArg.substring(0, colonIdx);
+        int p = portStr.toInt();
+        if (p > 0 && p <= 65535)
+            explicitPort = (uint16_t)p;
+    }
+
     IPAddress newIp(0, 0, 0, 0);
     if (ipArg.length() > 0 && ipArg != "0.0.0.0")
     {
@@ -2621,6 +2779,8 @@ void Event_SetSignalKIp()
     lockState();
     currentServicePort = signalkCtx.servicePort;
     unlockState();
+    if (explicitPort > 0)
+        currentServicePort = explicitPort;
 
     if (isValidIP(newIp))
     {
@@ -2840,6 +3000,8 @@ void handleConnected()
     runtimeState.tryingToConnect = false;
     unlockState();
 
+    wifiPortalNoticeUntilMs = 0;
+
     SharedStateSnapshot snapshot;
     captureSharedState(snapshot);
 
@@ -2940,9 +3102,9 @@ void setup()
 
     // LED
     pinMode(LED_PIN2, OUTPUT);
-    digitalWrite(LED_PIN2, HIGH);
     pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, HIGH);
+    setStatusLed(LED_PIN, false);
+    setStatusLed(LED_PIN2, false);
 
     // Create state mutex - critical for concurrency safety
     stateMutex = xSemaphoreCreateMutex();
@@ -2999,13 +3161,41 @@ void setup()
     Wire.setClock(I2C_CLOCK_HZ);
     Wire.setTimeOut(I2C_TIMEOUT_MS);
 
-    // Init ADS1115
+    // Init ADS1115. Try all valid addresses because ADDR pin wiring changes it.
     LOG_INF("Initializing ADS1115...");
+    const uint8_t adsCandidates[] = {0x48, 0x49, 0x4A, 0x4B};
+    bool adsDetected = false;
+    uint8_t adsDetectedAddr = 0;
+
     lockI2C();
-    if (!ads.begin())
+    for (uint8_t i = 0; i < sizeof(adsCandidates); i++)
     {
-        unlockI2C();
-        LOG_ERR("ADS1115 not found. Check the connection.");
+        uint8_t addr = adsCandidates[i];
+        if (ads.begin(addr, &Wire))
+        {
+            adsDetected = true;
+            adsDetectedAddr = addr;
+            break;
+        }
+    }
+
+    if (!adsDetected)
+    {
+        // Helpful diagnostic when ADS1115 is wired but on a different bus/pins.
+        for (uint8_t addr = 0x03; addr <= 0x77; addr++)
+        {
+            Wire.beginTransmission(addr);
+            if (Wire.endTransmission() == 0)
+            {
+                LOG_INFF("I2C device detected at 0x%02X", addr);
+            }
+        }
+    }
+    unlockI2C();
+
+    if (!adsDetected)
+    {
+        LOG_ERR("ADS1115 not found. Check wiring, I2C pins, and address (0x48-0x4B).");
         lockState();
         runtimeState.ads1115Found = false;
         runtimeState.pressure1 = 0.0f;
@@ -3015,8 +3205,7 @@ void setup()
     }
     else
     {
-        unlockI2C();
-        LOG_INF("ADS1115 found.");
+        LOG_INFF("ADS1115 found at 0x%02X", adsDetectedAddr);
         lockState();
         runtimeState.ads1115Found = true;
         unlockState();
@@ -3122,6 +3311,7 @@ void setup()
         if (WiFi.psk().length() == 0)
         {
             LOG_INF("No WiFi credentials - starting portal");
+            wifiPortalNoticeUntilMs = millis() + 20000UL;
             bool connected = wifiManager.autoConnect(hostName, APpassword);
             WiFi.mode(WIFI_AP_STA);
             delay(200);
@@ -3391,12 +3581,8 @@ void loop()
             Serial.printf("[INF] HTTP OTA finished OK in %lums\n", elapsed);
     }
 
-    // LED blink
-    if (ledBlinkActive && millis() - ledBlinkStart >= 100)
-    {
-        digitalWrite(LED_PIN, HIGH);
-        ledBlinkActive = false;
-    }
+    unsigned long now = millis();
+    handleLEDControl(now);
 
     bool otaBlocked = false;
     lockState();

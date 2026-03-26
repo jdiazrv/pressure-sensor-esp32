@@ -162,7 +162,7 @@
         <div class="track-zones" id="lowZones"></div>
         <div class="tick-row"><span id="lowTickMin">0</span><span id="lowTickMid">0</span><span id="lowTickMax">0</span></div>
       </div>
-      <div class="meta-strip"><span class="status-line">Status: <strong id="lowState">--</strong></span></div>
+      <div class="meta-strip"><span>V: <strong id="lowVoltage">--</strong></span></div>
     </section>
 
     <section class="pressure-card" id="highCard">
@@ -187,7 +187,7 @@
         <div class="track-zones" id="highZones"></div>
         <div class="tick-row"><span id="highTickMin">0</span><span id="highTickMid">0</span><span id="highTickMax">0</span></div>
       </div>
-      <div class="meta-strip"><span class="status-line">Status: <strong id="highState">--</strong></span></div>
+      <div class="meta-strip"><span>V: <strong id="highVoltage">--</strong></span></div>
     </section>
 
     <div class="footer-note"><span><strong id="footerHeadline">Last reading</strong></span><span id="footerDetail">--:--:--</span></div>
@@ -200,7 +200,7 @@
   <div class="toast" id="errorToast"></div>
 
   <script>
-    const UI_VERSION = 'v15';
+    const UI_VERSION = 'v20';
 
     var isConnected = false;
     var hasValidReading = false;
@@ -216,20 +216,23 @@
       partialMs: 0,
       totalMs: 0
     };
-    var HISTORY_WINDOW_MS = 5 * 60 * 1000;
+    var RANGE_UPDATE_INTERVAL_MS = 60 * 1000;
     var DEMO_SWEEP_STEP_MS = 38;
     var demoSweepTimer = null;
-    var sensorHistory = { low: [], high: [] };
+    var rangeTracking = {
+      low: { initialized: false, bucketStart: 0, bucketMin: 0, bucketMax: 0, lastMin: 0, lastMax: 0 },
+      high: { initialized: false, bucketStart: 0, bucketMin: 0, bucketMax: 0, lastMin: 0, lastMax: 0 }
+    };
     var gauges = {
       low: buildGaugeConfig('gaugeLow', {
         valueEl: 'valueLow', progressEl: 'lowProgress', zonesEl: 'lowZones', trackMainEl: 'lowTrack',
         minEl: 'lowMin', maxEl: 'lowMax', tickMin: 'lowTickMin', tickMid: 'lowTickMid', tickMax: 'lowTickMax',
-        zoneChip: 'lowZone', stateEl: 'lowState', targetEl: 'lowTarget', targetStartEl: 'lowTargetStart', targetEndEl: 'lowTargetEnd'
+        zoneChip: 'lowZone', stateEl: 'lowState', voltageEl: 'lowVoltage', targetEl: 'lowTarget', targetStartEl: 'lowTargetStart', targetEndEl: 'lowTargetEnd'
       }),
       high: buildGaugeConfig('gaugeHigh', {
         valueEl: 'valueHigh', progressEl: 'highProgress', zonesEl: 'highZones', trackMainEl: 'highTrack',
         minEl: 'highMin', maxEl: 'highMax', tickMin: 'highTickMin', tickMid: 'lowTickMid_unused', tickMax: 'highTickMax',
-        zoneChip: 'highZone', stateEl: 'highState', targetEl: 'highTarget', targetStartEl: 'highTargetStart', targetEndEl: 'highTargetEnd'
+        zoneChip: 'highZone', stateEl: 'highState', voltageEl: 'highVoltage', targetEl: 'highTarget', targetStartEl: 'highTargetStart', targetEndEl: 'highTargetEnd'
       })
     };
     // fix high mid tick id separately
@@ -274,6 +277,7 @@
           tickMax: document.getElementById(ids.tickMax),
           chip: document.getElementById(ids.zoneChip),
           state: document.getElementById(ids.stateEl),
+          voltage: document.getElementById(ids.voltageEl),
           target: document.getElementById(ids.targetEl),
           targetStart: document.getElementById(ids.targetStartEl),
           targetEnd: document.getElementById(ids.targetEndEl)
@@ -290,6 +294,8 @@
       writeStaticRangeLabels(gauges.high);
       gauges.low.refs.value.textContent = '--';
       gauges.high.refs.value.textContent = '--';
+      gauges.low.refs.voltage.textContent = '--';
+      gauges.high.refs.voltage.textContent = '--';
       document.getElementById('footerDetail').textContent = '--:--:--';
     }
 
@@ -385,7 +391,7 @@
     }
 
     function promptSignalKIp() {
-      var nextIp = window.prompt('SignalK diagnostic IP (use 0.0.0.0 to rediscover)', currentSignalkIp || '0.0.0.0');
+      var nextIp = window.prompt('SignalK IP (ip or ip:port, e.g. 192.168.1.10:3000). Use 0.0.0.0 to rediscover.', currentSignalkIp || '0.0.0.0');
       if (nextIp === null) return;
       nextIp = nextIp.trim();
       if (!nextIp) nextIp = '0.0.0.0';
@@ -423,6 +429,8 @@
     function setRangeMarkers(cfg, from, to) {
       var startPct = ((from - cfg.min) / cfg.range) * 100;
       var endPct = ((to - cfg.min) / cfg.range) * 100;
+      startPct = clamp(startPct, 0.8, 99.2);
+      endPct = clamp(endPct, 0.8, 99.2);
       cfg.refs.targetStart.style.left = startPct.toFixed(3) + '%';
       cfg.refs.targetEnd.style.left = endPct.toFixed(3) + '%';
       cfg.refs.targetStart.style.display = 'block';
@@ -434,28 +442,36 @@
       cfg.refs.targetEnd.style.display = 'none';
     }
 
-    function pruneHistory(list, nowMs) {
-      var cutoff = nowMs - HISTORY_WINDOW_MS;
-      while (list.length && list[0].ts < cutoff) list.shift();
-    }
-
     function updateGaugeHistory(cfg, key, value) {
-      if (!(value > 0)) return;
-      var nowMs = Date.now();
-      var list = sensorHistory[key];
-      list.push({ ts: nowMs, value: value });
-      pruneHistory(list, nowMs);
-      if (!list.length) {
-          clearRangeMarkers(cfg);
+      if (typeof value !== 'number' || isNaN(value)) {
         return;
       }
-      var minVal = list[0].value;
-      var maxVal = list[0].value;
-      for (var i = 1; i < list.length; i++) {
-        minVal = Math.min(minVal, list[i].value);
-        maxVal = Math.max(maxVal, list[i].value);
+
+      var nowMs = Date.now();
+      var rt = rangeTracking[key];
+      var bounded = clamp(value, cfg.min, cfg.max);
+
+      if (!rt.initialized) {
+        rt.initialized = true;
+        rt.bucketStart = nowMs;
+        rt.bucketMin = bounded;
+        rt.bucketMax = bounded;
+        rt.lastMin = bounded;
+        rt.lastMax = bounded;
+      } else {
+        rt.bucketMin = Math.min(rt.bucketMin, bounded);
+        rt.bucketMax = Math.max(rt.bucketMax, bounded);
+
+        if (nowMs - rt.bucketStart >= RANGE_UPDATE_INTERVAL_MS) {
+          rt.lastMin = rt.bucketMin;
+          rt.lastMax = rt.bucketMax;
+          rt.bucketStart = nowMs;
+          rt.bucketMin = bounded;
+          rt.bucketMax = bounded;
+        }
       }
-      setRangeMarkers(cfg, clamp(minVal, cfg.min, cfg.max), clamp(maxVal, cfg.min, cfg.max));
+
+      setRangeMarkers(cfg, rt.lastMin, rt.lastMax);
     }
 
     function renderZoneTrack(cfg) {
@@ -518,13 +534,13 @@
     }
 
     function updateLastUpdateTime() {
-      if (!lastValidReadingTime) {
+      if (!lastValidReadingTime || !isFinite(lastValidReadingTime)) {
         document.getElementById('footerDetail').textContent = '--:--:--';
         document.getElementById('partialSub').textContent = 'Last reading --:--:--';
         return;
       }
       var timeString = new Date(lastValidReadingTime).toLocaleTimeString();
-      document.getElementById('footerDetail').textContent = 'Last reading ' + timeString;
+      document.getElementById('footerDetail').textContent = timeString;
       document.getElementById('partialSub').textContent = 'Last reading ' + timeString;
     }
 
@@ -542,9 +558,10 @@
       updateLastUpdateTime();
     }
 
-    function updateGaugeCard(cfg, value, historyKey) {
+    function updateGaugeCard(cfg, value, historyKey, voltage) {
       var bounded = clamp(value, cfg.min, cfg.max);
       cfg.refs.value.textContent = value.toFixed(1);
+      cfg.refs.voltage.textContent = (typeof voltage === 'number' && !isNaN(voltage)) ? voltage.toFixed(3) + ' V' : '--';
       renderSweepFrame(cfg, bounded);
       cfg.refs.progress.style.background = progressFillForValue(cfg, bounded, true);
       var zone = locateZone(cfg.highlights, bounded);
@@ -564,7 +581,7 @@
       var chip = cfg.refs.chip;
       var state = classifyZone(zone);
       chip.className = 'zone-chip ' + state.className;
-      cfg.refs.state.textContent = state.state;
+      if (cfg.refs.state) cfg.refs.state.textContent = state.state;
       chip.textContent = state.label;
     }
 
@@ -598,6 +615,13 @@
       heroStatus.textContent = statusText;
     }
 
+    function canRenderLiveReadings(data) {
+      if (!data || typeof data !== 'object') return false;
+      if (data.dataValid) return true;
+      if (data.adsFound) return true;
+      return data.sensorMode === 'demo' || data.sensorMode === 'demo_udp';
+    }
+
     function updateGauges() {
       var xhr = new XMLHttpRequest();
       xhr.onreadystatechange = function() {
@@ -608,28 +632,27 @@
             if (data && data.hasOwnProperty('pressure1') && data.hasOwnProperty('pressure2')) {
               var low = parseFloat(data.pressure1);
               var high = parseFloat(data.pressure2);
+              var lowVoltage = parseFloat(data.voltage1);
+              var highVoltage = parseFloat(data.voltage2);
               if (isNaN(low) || isNaN(high)) throw new Error('NaN values');
-              var validReading = !!(data && data.dataValid);
+              var renderReading = canRenderLiveReadings(data);
               currentSignalkIp = (data && data.signalkIp) ? String(data.signalkIp) : '0.0.0.0';
               currentSignalkAlive = !!(data && data.signalkAlive);
               currentDeviceError = (data && data.error) ? String(data.error) : '';
               currentFirmwareVersion = (data && data.firmwareVersion) ? String(data.firmwareVersion) : '--';
               updateRSSI(extractRSSI(data));
               isConnected = true;
+              lastValidReadingTime = Date.now();
               updateConnectionStatus();
-              if (validReading) {
+              if (renderReading) {
                 hasValidReading = true;
-                lastValidReadingTime = Date.now();
                 stopDemoSweep();
-                updateGaugeCard(gauges.low, low, 'low');
-                updateGaugeCard(gauges.high, high, 'high');
-                updateRuntimeState(data);
-                updateLastUpdateTime();
-                updateHero(low, high);
-              } else {
-                updateHero(low, high);
-                updateLastUpdateTime();
+                updateGaugeCard(gauges.low, low, 'low', lowVoltage);
+                updateGaugeCard(gauges.high, high, 'high', highVoltage);
               }
+              updateRuntimeState(data);
+              updateHero(low, high);
+              updateLastUpdateTime();
             } else {
               throw new Error('Invalid payload');
             }

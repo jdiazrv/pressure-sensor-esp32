@@ -5,6 +5,19 @@ It reads two 0.5-4.5 V pressure transducers through an ADS1115, shows the values
 
 This project is the ESP32 evolution of the original `8266-pressure-sensor`, adapted for the same hardware concept and marine workflow with a more complete web UI, better diagnostics, demo modes, OTA updates, and more robust SignalK discovery.
 
+## Release Notes
+
+### v1.5
+
+- LED state machine consolidated and aligned with connectivity/error priorities
+- Fast dual-LED blink alarm when ADS1115 is missing in real mode
+- ADS1115 startup detection across addresses `0x48-0x4B` with I2C diagnostics on failure
+- Dashboard now includes sensor voltages on both pressure cards
+- Manual SignalK target now accepts `ip:port` in UI
+- Dashboard `Last reading` update made robust
+- Min/max range markers consolidated into periodic one-minute updates
+- Removed duplicated card status text while preserving color status chip (`Warning/Normal/Alarm`)
+
 ## Features
 
 - Dual pressure acquisition with ADS1115
